@@ -149,3 +149,17 @@ python3 idea-plugin/verify.py --project /path/to/open/project --navigate
 ## 0.2.2 首次悬停读取
 
 同一次 ⌥J 触发中，若来源应用首次尚未提供可识别引用，最多读取三次、间隔 140 ms；成功后立即停止，不需再按快捷键。只重试文字读取，不重复发送编辑器跳转。应用切换、鼠标移动超过 8 点或任务取消后丢弃本次读取。不会持续监听鼠标或后台轮询；无结果才最终提示。系统日志只记录次数、片段数量与耗时，诊断界面标注自动重读次数。
+
+## DMG 发布包
+
+GitHub 仓库：<https://github.com/xiay8874-source/CodeJump>
+
+构建应用与 IDEA 插件后，打包已有产物：
+
+```sh
+python3 script/package_dmg.py
+```
+
+DMG 包含 `CodeJump.app`、Applications 快捷入口、IDEA Companion ZIP 和安装说明；SHA-256 校验文件与 DMG 同目录。不包含本机设置、历史记录或签名私钥。脚本会校验应用签名和磁盘镜像，并拒绝覆盖同名发布包。
+
+源码通过 Git 推送，DMG 和插件 ZIP 作为 GitHub Release 附件上传。当前包为 Apple Silicon（arm64），要求 macOS 14+，使用本机固定证书签名，尚未做 Apple 公证。
