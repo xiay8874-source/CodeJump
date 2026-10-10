@@ -128,9 +128,10 @@ enum ProjectWindowFocus {
         let started = ProcessInfo.processInfo.systemUptime
 
         func event(_ stage: String, code: Int32 = 0, pid: pid_t = 0,
-                   count: Int = 0, limit: Int = 0, depth: Int = 0, attribute: String = "") {
+                   count: Int = 0, limit: Int = 0, depth: Int = 0, attribute: String = "",
+                   reportedCount: Int = -1, arrayCount: Int = -1) {
             let milliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1000
-            Self.logger.info("request=\(identifier, privacy: .public) stage=\(stage, privacy: .public) code=\(code) pid=\(pid) count=\(count) limit=\(limit) depth=\(depth) attribute=\(attribute, privacy: .public) elapsed_ms=\(milliseconds)")
+            Self.logger.info("request=\(identifier, privacy: .public) stage=\(stage, privacy: .public) code=\(code) pid=\(pid) count=\(count) limit=\(limit) depth=\(depth) attribute=\(attribute, privacy: .public) reported_count=\(reportedCount) array_count=\(arrayCount) elapsed_ms=\(milliseconds)")
         }
     }
 
@@ -256,43 +257,70 @@ enum ProjectWindowFocus {
 
     private static func elements(_ element: AXUIElement, _ attribute: CFString, limit: Int,
                                  budget: Budget, unsupportedIsEmpty: Bool = false) -> [AXUIElement]? {
+        // Java's lazy AX bridge can report zero windows through the count API
+        // while the array getter exposes the live windows. Use one direct IPC.
+        if (attribute as String) == "AXWindows" {
+            return copyElementArray(element, attribute, limit: limit, budget: budget,
+                                    unsupportedIsEmpty: unsupportedIsEmpty, reportedCount: nil)
+        }
         guard budget.prepare(element) else { budget.trace.event("elements_budget", attribute: attribute as String); return nil }
         var count: CFIndex = 0
         let result = AXUIElementGetAttributeValueCount(element, attribute, &count)
-        if result == .attributeUnsupported || result == .notImplemented || result == .failure {
+        budget.trace.event("elements_count_result", code: result.rawValue, count: count,
+                           limit: limit, attribute: attribute as String)
+        if result == .attributeUnsupported || result == .notImplemented || result == .failure
+            || (result == .success && count == 0) {
             // Java accessibility bridges can expose an AX array while omitting
             // the separate count API. Read only its element handles, never text.
             budget.trace.event("elements_count_fallback", code: result.rawValue, limit: limit, attribute: attribute as String)
-            guard budget.prepare(element) else { return nil }
-            var value: CFTypeRef?
-            let fallback = AXUIElementCopyAttributeValue(element, attribute, &value)
-            if unsupportedIsEmpty, fallback == .attributeUnsupported || fallback == .noValue { return [] }
-            guard fallback == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
-                budget.trace.event("elements_fallback_failed", code: fallback.rawValue, attribute: attribute as String); return nil
-            }
-            let array = value as! CFArray
-            count = CFArrayGetCount(array)
-            guard count <= limit else {
-                budget.trace.event("elements_limit", count: count, limit: limit, attribute: attribute as String); return nil
-            }
-            return (array as [AnyObject]).compactMap { child in
-                CFGetTypeID(child) == AXUIElementGetTypeID() ? (child as! AXUIElement) : nil
-            }
+            return copyElementArray(element, attribute, limit: limit, budget: budget,
+                                    unsupportedIsEmpty: unsupportedIsEmpty,
+                                    reportedCount: result == .success ? count : nil)
         }
         if unsupportedIsEmpty, result == .noValue { return [] }
         guard result == .success, count >= 0, count <= limit else {
             budget.trace.event(result == .success ? "elements_limit" : "elements_count_failed",
                                code: result.rawValue, count: count, limit: limit, attribute: attribute as String); return nil
         }
-        if count == 0 { return [] }
         guard budget.prepare(element) else { budget.trace.event("elements_copy_budget", attribute: attribute as String); return nil }
         var values: CFArray?
         let copyResult = AXUIElementCopyAttributeValues(element, attribute, 0, count, &values)
         guard copyResult == .success, let values else {
             budget.trace.event("elements_copy_failed", code: copyResult.rawValue, count: count, attribute: attribute as String); return nil
         }
+        let actualCount = CFArrayGetCount(values)
+        budget.trace.event("elements_values_count", count: actualCount, limit: limit,
+                           attribute: attribute as String, reportedCount: count, arrayCount: actualCount)
+        guard actualCount <= limit else { return nil }
         return (values as [AnyObject]).compactMap { value in
             CFGetTypeID(value) == AXUIElementGetTypeID() ? (value as! AXUIElement) : nil
+        }
+    }
+
+    private static func copyElementArray(_ element: AXUIElement, _ attribute: CFString, limit: Int,
+                                         budget: Budget, unsupportedIsEmpty: Bool,
+                                         reportedCount: Int?) -> [AXUIElement]? {
+        guard budget.prepare(element) else { budget.trace.event("elements_array_budget", attribute: attribute as String); return nil }
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
+        if unsupportedIsEmpty, result == .attributeUnsupported || result == .noValue {
+            budget.trace.event("elements_array_empty", code: result.rawValue, attribute: attribute as String,
+                               reportedCount: reportedCount ?? -1, arrayCount: 0)
+            return []
+        }
+        guard result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
+            budget.trace.event("elements_array_failed", code: result.rawValue, attribute: attribute as String,
+                               reportedCount: reportedCount ?? -1); return nil
+        }
+        let array = value as! CFArray
+        let actualCount = CFArrayGetCount(array)
+        budget.trace.event("elements_array_count", count: actualCount, limit: limit,
+                           attribute: attribute as String, reportedCount: reportedCount ?? -1, arrayCount: actualCount)
+        guard actualCount <= limit else {
+            budget.trace.event("elements_limit", count: actualCount, limit: limit, attribute: attribute as String); return nil
+        }
+        return (array as [AnyObject]).compactMap { child in
+            CFGetTypeID(child) == AXUIElementGetTypeID() ? (child as! AXUIElement) : nil
         }
     }
 }
