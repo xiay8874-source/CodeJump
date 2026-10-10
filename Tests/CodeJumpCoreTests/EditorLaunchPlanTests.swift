@@ -104,6 +104,31 @@ struct EditorLaunchPlanTests {
             #expect(throws: EditorLaunchError.projectRootChanged) {
                 try EditorLaunchPlan.makeArguments(candidate: candidate, editor: editor)
             }
+            #expect(throws: EditorLaunchError.projectRootChanged) {
+                try EditorLaunchPlan.project(project: candidate.project, editor: editor)
+            }
+        }
+    }
+
+    @Test func projectPlanOpensOnlyCanonicalRootWithoutNeedingASourceFile() throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let project = fixture.candidate.project
+        try FileManager.default.removeItem(at: fixture.file)
+        let app = fixture.temporary.appendingPathComponent("项目跳转 $IDE `literal`.app")
+        let launchers: [(EditorKind, String)] = [
+            (.idea, "Contents/MacOS/idea"),
+            (.vscode, "Contents/Resources/app/bin/code"),
+            (.cursor, "Contents/Resources/app/bin/cursor"),
+            (.zed, "Contents/MacOS/cli")
+        ]
+        for (editor, relativeExecutable) in launchers {
+            let executable = app.appendingPathComponent(relativeExecutable)
+            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("fixture must never run".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            let plan = try EditorLaunchPlan.project(project: project, editor: editor, applicationPath: app.path)
+            #expect(plan.executable == executable.path)
+            #expect(plan.arguments == [project.path])
         }
     }
 

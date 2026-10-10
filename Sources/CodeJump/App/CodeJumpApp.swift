@@ -7,6 +7,7 @@ import SwiftUI
 
     var body: some Scene {
         MenuBarExtra("CodeJump", systemImage: "arrow.up.forward.app") {
+            Button("切换项目…  \(store.projectShortcutLabel)") { store.showProjectPicker() }
             Button("项目与设置…") { store.showMainWindow() }
             Button("定位剪贴板中的引用") {
                 store.query = NSPasteboard.general.string(forType: .string) ?? ""

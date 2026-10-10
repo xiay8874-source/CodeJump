@@ -10,6 +10,21 @@ struct Preferences: Codable {
     var customApplicationPath: String? = nil
     var commandOptionShortcut = false
     var previewBeforeOpening = false
+    var projectUsage: [String: ProjectUsage] = [:]
+
+    init() {}
+    private enum CodingKeys: String, CodingKey {
+        case projects, editor, customApplicationPath, commandOptionShortcut, previewBeforeOpening, projectUsage
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        projects = try values.decodeIfPresent([ProjectRoot].self, forKey: .projects) ?? []
+        editor = try values.decodeIfPresent(EditorKind.self, forKey: .editor) ?? .idea
+        customApplicationPath = try values.decodeIfPresent(String.self, forKey: .customApplicationPath)
+        commandOptionShortcut = try values.decodeIfPresent(Bool.self, forKey: .commandOptionShortcut) ?? false
+        previewBeforeOpening = try values.decodeIfPresent(Bool.self, forKey: .previewBeforeOpening) ?? false
+        projectUsage = try values.decodeIfPresent([String: ProjectUsage].self, forKey: .projectUsage) ?? [:]
+    }
 }
 
 @MainActor final class AppStore: ObservableObject {
@@ -32,12 +47,15 @@ struct Preferences: Codable {
     @Published var accessibilityGranted = HoverReader.isTrusted
     @Published var shortcutRegistered = false
     @Published var lastOpened = ""
+    @Published var projectQuery = ""
+    @Published var selectedProjectIndex = 0
     private var hotKey: HotKeyService?
     private var watcher: ProjectWatcher?
     private var refreshTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var indexGeneration = 0
-    private var editorProcess: Process?
+    private var lastLaunchTime = Date.distantPast
+    private var currentLaunchID: UUID?
     private var pendingLink: URL?
     private let service: IndexService
     private let settingsURL: URL
@@ -58,9 +76,14 @@ struct Preferences: Codable {
     }
 
     var shortcutLabel: String { preferences.commandOptionShortcut ? "⌘⌥J" : "⌥J" }
+    var projectShortcutLabel: String { preferences.commandOptionShortcut ? "⌘⌥P" : "⌥P" }
+    var rankedProjects: [ProjectRoot] {
+        ProjectRanking.sorted(projects: preferences.projects, usage: preferences.projectUsage, query: projectQuery)
+    }
 
     func start() {
-        hotKey = HotKeyService { [weak self] in self?.capturePointer() }
+        hotKey = HotKeyService(navigate: { [weak self] in self?.capturePointer() },
+                              chooseProject: { [weak self] in self?.showProjectPicker() })
         registerShortcut()
         configureWatcher()
         indexing = true
@@ -91,6 +114,51 @@ struct Preferences: Codable {
     }
 
     func showMainWindow() { checkPermission(); windows.showMain() }
+
+    func showProjectPicker() {
+        searchGeneration += 1; busy = false
+        guard !preferences.projects.filter(\.enabled).isEmpty else {
+            error = "请先添加需要切换的项目。"; showMainWindow(); return
+        }
+        projectQuery = ""; selectedProjectIndex = 0
+        windows.showProjects()
+    }
+
+    func chooseProject(at index: Int) {
+        let projects = rankedProjects
+        guard projects.indices.contains(index) else { return }
+        let project = projects[index]
+        windows.dismissCandidates()
+        searchGeneration += 1
+        let generation = searchGeneration
+        let editor = preferences.editor
+        let configured = preferences.projects
+        let applicationPath = preferences.customApplicationPath
+        Task {
+            // Revalidate the imported root before both AX focus and CLI fallback.
+            do {
+                let plan = try EditorLaunchPlan.project(project: project, editor: editor, applicationPath: applicationPath)
+                let focused = await Task.detached(priority: .userInitiated) {
+                    await ProjectWindowFocus.focus(project: project, editor: editor, configuredProjects: configured)
+                }.value
+                guard generation == searchGeneration else { return }
+                if !focused { try launch(plan, editor: editor) }
+                var usage = preferences.projectUsage[project.id.uuidString] ?? ProjectUsage()
+                usage.record(at: Date())
+                preferences.projectUsage[project.id.uuidString] = usage
+                persist()
+                status = focused ? "已切换到 \(project.name)" : "已请求打开 \(project.name)"
+            } catch {
+                guard generation == searchGeneration else { return }
+                self.error = "项目打开失败：\(error.localizedDescription)"; showMainWindow()
+            }
+        }
+    }
+
+    func testPointerAfterDelay() {
+        status = "请在 3 秒内将鼠标移到代码引用上…"
+        Task { try? await Task.sleep(for: .seconds(3)); capturePointer() }
+    }
 
     func importProjects() {
         let panel = NSOpenPanel()
@@ -155,10 +223,13 @@ struct Preferences: Codable {
         let point = CGEvent(source: nil)?.location ?? .zero
         let name = NSWorkspace.shared.frontmostApplication?.localizedName ?? "应用"
         busy = true; error = nil
+        searchGeneration += 1
+        let generation = searchGeneration
         Task {
             let capture = await Task.detached(priority: .userInitiated) {
                 HoverReader.capture(x: point.x, y: point.y, application: name)
             }.value
+            guard generation == searchGeneration else { return }
             captureMilliseconds = capture.elapsedMilliseconds
             for fragment in capture.fragments {
                 var references = ReferenceParser.parse(fragment.text)
@@ -166,11 +237,11 @@ struct Preferences: Codable {
                     references = [label]
                 }
                 if fragment.origin == "引用链接" {
-                    let labels = capture.fragments.filter { $0.origin != "引用链接" }.map(\.text)
-                    references = references.map { ReferenceContext.enrich($0, labels: labels) }
+                    references = references.map { ReferenceContext.enrich($0, labels: fragment.labels) }
                 }
                 guard !references.isEmpty else { continue }
                 let result = await service.resolve(references)
+                guard generation == searchGeneration else { return }
                 guard !result.0.isEmpty else { continue }
                 captureText = fragment.text; captureOrigin = "\(capture.application) · \(fragment.origin)"
                 finishResolution(references, result: result, precise: fragment.precise)
@@ -188,7 +259,10 @@ struct Preferences: Codable {
         if references.isEmpty, let label = ReferenceParser.parseClassLabel(query) { references = [label] }
         guard !references.isEmpty else { error = "未识别到文件路径、类名或方法引用。"; return }
         busy = true; error = nil
-        Task { await resolve(references, text: query, origin: "手动输入", precise: true) }
+        searchGeneration += 1
+        let generation = searchGeneration
+        let text = query
+        Task { await resolve(references, text: text, origin: "手动输入", precise: true, generation: generation) }
     }
 
     func handle(url: URL) {
@@ -198,12 +272,14 @@ struct Preferences: Codable {
         // External links always expose the resolved destination before opening.
         let references = ReferenceParser.parse(query)
         guard !references.isEmpty else { error = "跳转链接无效。"; showMainWindow(); return }
-        Task { await resolve(references, text: query, origin: "跳转链接", precise: false) }
-    }
-
-    private func resolve(_ references: [CodeReference], text: String, origin: String, precise: Bool) async {
         searchGeneration += 1
         let generation = searchGeneration
+        let text = query
+        Task { await resolve(references, text: text, origin: "跳转链接", precise: false, generation: generation) }
+    }
+
+    private func resolve(_ references: [CodeReference], text: String, origin: String, precise: Bool, generation: Int) async {
+        guard generation == searchGeneration else { return }
         captureText = text; captureOrigin = origin
         let result = await service.resolve(references)
         guard generation == searchGeneration else { return }
@@ -230,44 +306,47 @@ struct Preferences: Codable {
         open(candidates[index])
     }
 
-    func dismissCandidates() { windows.dismissCandidates() }
+    func dismissCandidates() {
+        searchGeneration += 1; busy = false
+        windows.dismissCandidates()
+    }
 
     private func open(_ candidate: JumpCandidate) {
-        guard editorProcess?.isRunning != true else {
-            error = "上一次请求仍在等待编辑器响应，请稍后再试。"; showMainWindow(); return
-        }
+        // A newly started IDE may keep this process alive for hours. Its lifetime
+        // must never lock subsequent navigation; only debounce accidental double triggers.
+        guard Date().timeIntervalSince(lastLaunchTime) >= 0.35 else { return }
         do {
             let plan = try EditorLaunchPlan.make(candidate: candidate, editor: preferences.editor,
                 applicationPath: preferences.customApplicationPath)
+            try launch(plan, editor: preferences.editor)
+            windows.dismissCandidates()
+            lastOpened = "\(candidate.project.name) / \(candidate.relativePath)\(candidate.line.map { ":\($0)" } ?? "")"
+        } catch {
+            self.error = "打开失败：\(error.localizedDescription)"; showMainWindow()
+        }
+    }
+
+    private func launch(_ plan: EditorLaunchPlan, editor: EditorKind) throws {
             let process = Process()
+            let requestID = UUID()
+            let requestedAt = Date()
             process.executableURL = URL(fileURLWithPath: plan.executable)
             process.arguments = plan.arguments
             process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
             process.terminationHandler = { [weak self] task in
                 let exitStatus = task.terminationStatus
                 Task { @MainActor in
-                    guard let self else { return }
-                    self.editorProcess = nil
-                    if exitStatus != 0 {
+                    guard let self, self.currentLaunchID == requestID else { return }
+                    if exitStatus != 0 && Date().timeIntervalSince(requestedAt) < 30 {
                         self.error = "编辑器启动请求失败（退出码 \(exitStatus)），请检查编辑器状态或安装位置。"
                         self.status = "编辑器未完成启动请求"
                     }
                 }
             }
             try process.run()
-            editorProcess = process
-            windows.dismissCandidates()
-            lastOpened = "\(candidate.project.name) / \(candidate.relativePath)\(candidate.line.map { ":\($0)" } ?? "")"
-            status = "已发送到 \(preferences.editor.displayTitle)"
-            let processID = process.processIdentifier
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(8))
-                guard let self, self.editorProcess?.processIdentifier == processID, self.editorProcess?.isRunning == true else { return }
-                self.status = "编辑器仍在处理请求，请检查其状态"
-            }
-        } catch {
-            self.error = "打开失败：\(error.localizedDescription)"; showMainWindow()
-        }
+            currentLaunchID = requestID
+            lastLaunchTime = requestedAt
+            status = "已发送到 \(editor.displayTitle)"
     }
 }
 

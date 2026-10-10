@@ -51,6 +51,14 @@ public struct EditorLaunchPlan: Sendable {
         return EditorLaunchPlan(executable: executable, arguments: arguments)
     }
 
+    /// Opens only the imported project. No file or location is inferred.
+    public static func project(project: ProjectRoot, editor: EditorKind,
+                               applicationPath: String? = nil) throws -> EditorLaunchPlan {
+        let root = try validatedRoot(project.path)
+        let executable = try resolveExecutable(editor: editor, applicationPath: applicationPath)
+        return EditorLaunchPlan(executable: executable, arguments: [root.path])
+    }
+
     /// Checks the filesystem without launching or discovering an application.
     public static func makeArguments(candidate: JumpCandidate, editor: EditorKind) throws -> [String] {
         if let line = candidate.line, line < 1 || line > Int(Int32.max) {
@@ -61,16 +69,8 @@ public struct EditorLaunchPlan: Sendable {
             throw EditorLaunchError.invalidPosition
         }
 
-        let root = try canonicalURL(candidate.project.path, isProject: true)
-        // Imported roots are already POSIX-canonical. Pin that identity rather
-        // than letting root and file both follow a newly substituted root symlink.
-        guard root.path == candidate.project.path else {
-            throw EditorLaunchError.projectRootChanged
-        }
+        let root = try validatedRoot(candidate.project.path)
         let file = try canonicalURL(candidate.absolutePath)
-        guard (try? root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-            throw EditorLaunchError.projectNotFound(candidate.project.path)
-        }
         // Compare components, not string prefixes: /repo-copy is not inside /repo.
         let rootParts = root.pathComponents
         let fileParts = file.pathComponents
@@ -109,6 +109,17 @@ public struct EditorLaunchPlan: Sendable {
         guard let line = candidate.line else { return file }
         if let column = candidate.column { return "\(file):\(line):\(column)" }
         return "\(file):\(line)"
+    }
+
+    private static func validatedRoot(_ path: String) throws -> URL {
+        let root = try canonicalURL(path, isProject: true)
+        // Imported roots are already POSIX-canonical. Pin that identity rather
+        // than letting root and file both follow a newly substituted root symlink.
+        guard root.path == path else { throw EditorLaunchError.projectRootChanged }
+        guard (try? root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+            throw EditorLaunchError.projectNotFound(path)
+        }
+        return root
     }
 
     private static func canonicalURL(_ path: String, isProject: Bool = false) throws -> URL {

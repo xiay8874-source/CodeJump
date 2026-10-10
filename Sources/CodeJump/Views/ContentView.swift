@@ -34,6 +34,7 @@ struct ContentView: View {
                         Spacer()
                         if store.indexing { ProgressView().controlSize(.small) }
                         Text("\(store.fileCount.formatted()) 个文件").foregroundStyle(.secondary)
+                        Button("切换项目 \(store.projectShortcutLabel)") { store.showProjectPicker() }
                         Button("添加项目…") { store.importProjects() }
                     }
                     if store.preferences.projects.isEmpty {
@@ -82,6 +83,8 @@ struct ContentView: View {
                         Text("⌥J").tag(false); Text("⌘⌥J").tag(true)
                     }.pickerStyle(.segmented).frame(width: 150)
                         .onChange(of: store.preferences.commandOptionShortcut) { _, _ in store.persist(); store.registerShortcut() }
+                    Text("代码 \(store.shortcutLabel) · 项目 \(store.projectShortcutLabel)")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("每次先显示定位预览", isOn: $store.preferences.previewBeforeOpening)
                         .font(.caption).onChange(of: store.preferences.previewBeforeOpening) { _, _ in store.persist() }
                 }
@@ -105,6 +108,7 @@ struct ContentView: View {
                         .lineLimit(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Text("读取 \(store.captureMilliseconds, specifier: "%.0f") ms · 查询 \(store.queryMilliseconds, specifier: "%.1f") ms · 索引 \(store.indexMilliseconds, specifier: "%.0f") ms")
                         .foregroundStyle(.secondary).font(.caption)
+                    Button("测试悬停（3 秒后读取鼠标位置）") { store.testPointerAfterDelay() }
                 }.padding(.top, 6)
             }.font(.caption)
             HStack {

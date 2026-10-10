@@ -5,6 +5,7 @@ struct CaptureFragment: Sendable {
     let text: String
     let origin: String
     let precise: Bool
+    var labels: [String] = []
 }
 
 struct HoverCapture: Sendable {
@@ -45,7 +46,15 @@ enum HoverReader {
                 if CFGetTypeID(url) == CFURLGetTypeID() { value = (url as! URL).absoluteString }
                 else { value = url as? String }
                 if let value, !value.isEmpty {
-                    fragments.append(CaptureFragment(text: String(value.prefix(4096)), origin: "引用链接", precise: depth <= 2))
+                    // Only this link's own label (or the hit descendant inside it) may
+                    // supplement its target. Another reference in the paragraph is unrelated.
+                    let labelElements = depth == 0 ? [element] : [element, hit]
+                    let labels = labelElements.flatMap { labelElement in
+                        [kAXTitleAttribute, kAXValueAttribute].compactMap { name in
+                            string(labelElement, name as CFString).flatMap { $0.count <= 512 ? $0 : nil }
+                        }
+                    }
+                    fragments.append(CaptureFragment(text: String(value.prefix(4096)), origin: "引用链接", precise: depth <= 2, labels: labels))
                 }
             }
             if depth == 0, let nearby = textAtPosition(element, point: CGPoint(x: x, y: y)) {
