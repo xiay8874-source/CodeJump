@@ -78,13 +78,15 @@ struct Preferences: Codable {
 
     var shortcutLabel: String { preferences.commandOptionShortcut ? "⌘⌥J" : "⌥J" }
     var projectShortcutLabel: String { preferences.commandOptionShortcut ? "⌘⌥P" : "⌥P" }
+    var homeShortcutLabel: String { preferences.commandOptionShortcut ? "⌘⌥H" : "⌥H" }
     var rankedProjects: [ProjectRoot] {
         ProjectRanking.sorted(projects: preferences.projects, usage: preferences.projectUsage, query: projectQuery)
     }
 
     func start() {
         hotKey = HotKeyService(navigate: { [weak self] in self?.capturePointer() },
-                              chooseProject: { [weak self] in self?.showProjectPicker() })
+                              chooseProject: { [weak self] in self?.showProjectPicker() },
+                              showHome: { [weak self] in self?.showMainWindow() })
         registerShortcut()
         configureWatcher()
         indexing = true

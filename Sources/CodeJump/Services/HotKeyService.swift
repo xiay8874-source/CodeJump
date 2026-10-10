@@ -7,14 +7,18 @@ final class HotKeyService: @unchecked Sendable {
     private static let signature: OSType = 0x434A6D70
     private var navigateHotKey: EventHotKeyRef?
     private var projectHotKey: EventHotKeyRef?
+    private var homeHotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let navigate: @MainActor @Sendable () -> Void
     private let chooseProject: @MainActor @Sendable () -> Void
+    private let showHome: @MainActor @Sendable () -> Void
 
     init(navigate: @escaping @MainActor @Sendable () -> Void,
-         chooseProject: @escaping @MainActor @Sendable () -> Void) {
+         chooseProject: @escaping @MainActor @Sendable () -> Void,
+         showHome: @escaping @MainActor @Sendable () -> Void) {
         self.navigate = navigate
         self.chooseProject = chooseProject
+        self.showHome = showHome
     }
 
     @MainActor
@@ -38,6 +42,7 @@ final class HotKeyService: @unchecked Sendable {
             switch hotKeyID.id {
             case 1: action = service.navigate
             case 2: action = service.chooseProject
+            case 3: action = service.showHome
             default: return OSStatus(eventNotHandledErr)
             }
             Task { @MainActor in action() }
@@ -52,6 +57,9 @@ final class HotKeyService: @unchecked Sendable {
         let projectStatus = RegisterEventHotKey(UInt32(kVK_ANSI_P), modifiers,
             EventHotKeyID(signature: Self.signature, id: 2), GetApplicationEventTarget(), 0, &projectHotKey)
         guard projectStatus == noErr, projectHotKey != nil else { return false }
+        let homeStatus = RegisterEventHotKey(UInt32(kVK_ANSI_H), modifiers,
+            EventHotKeyID(signature: Self.signature, id: 3), GetApplicationEventTarget(), 0, &homeHotKey)
+        guard homeStatus == noErr, homeHotKey != nil else { return false }
         complete = true
         return true
     }
@@ -60,12 +68,14 @@ final class HotKeyService: @unchecked Sendable {
     func unregister() {
         if let navigateHotKey { UnregisterEventHotKey(navigateHotKey); self.navigateHotKey = nil }
         if let projectHotKey { UnregisterEventHotKey(projectHotKey); self.projectHotKey = nil }
+        if let homeHotKey { UnregisterEventHotKey(homeHotKey); self.homeHotKey = nil }
         if let handler { RemoveEventHandler(handler); self.handler = nil }
     }
 
     deinit {
         if let navigateHotKey { UnregisterEventHotKey(navigateHotKey) }
         if let projectHotKey { UnregisterEventHotKey(projectHotKey) }
+        if let homeHotKey { UnregisterEventHotKey(homeHotKey) }
         if let handler { RemoveEventHandler(handler) }
     }
 }

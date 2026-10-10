@@ -11,22 +11,81 @@ import SwiftUI
     private var feedbackPanel: FeedbackPanel?
     private var feedbackTask: Task<Void, Never>?
 
-    init(store: AppStore) { self.store = store }
+    init(store: AppStore) {
+        self.store = store
+        super.init()
+        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersChanged(_:)),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
 
     func showMain() {
         store.dismissCandidates(restoreFocus: false)
         dismissFeedback()
+        let isNewWindow = mainWindow == nil
         if mainWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 760),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 680),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "CodeJump — 项目与设置"
-            window.contentViewController = NSHostingController(rootView: ContentView(store: store))
-            window.setContentSize(NSSize(width: 720, height: 780))
-            window.isReleasedWhenClosed = false; window.center()
+            let hosting = NSHostingController(rootView: ContentView(store: store))
+            // The scrollable view fills the window; its ideal content height must
+            // not impose a second, larger minimum through hosting constraints.
+            hosting.sizingOptions = []
+            window.contentViewController = hosting
+            window.isReleasedWhenClosed = false
             mainWindow = window
         }
+        if let mainWindow { fitMainWindow(mainWindow, initially: isNewWindow) }
         NSApp.activate()
         mainWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func screenParametersChanged(_ notification: Notification) {
+        guard let mainWindow else { return }
+        // Display disconnection, resolution and Dock changes can invalidate a
+        // saved frame. Geometry repair does not reveal or activate the window.
+        fitMainWindow(mainWindow, initially: false)
+    }
+
+    private func fitMainWindow(_ window: NSWindow, initially: Bool) {
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        let screens = NSScreen.screens.filter { $0.visibleFrame.width > 0 && $0.visibleFrame.height > 0 }
+        guard !screens.isEmpty else { return }
+        let original = window.frame
+        let containing = initially ? nil : screens.first { $0.visibleFrame.contains(original) }
+        let overlapping = screens.max { lhs, rhs in
+            let left = lhs.visibleFrame.intersection(original)
+            let right = rhs.visibleFrame.intersection(original)
+            let leftArea = left.isNull ? 0 : left.width * left.height
+            let rightArea = right.isNull ? 0 : right.width * right.height
+            return leftArea < rightArea
+        }
+        let pointerScreen = screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        let intersectingScreen = overlapping.flatMap { $0.visibleFrame.intersects(original) ? $0 : nil }
+        let screen = containing ?? (initially ? nil : intersectingScreen) ?? pointerScreen ?? NSScreen.main ?? screens[0]
+        let visible = screen.visibleFrame
+        let placement = visible.insetBy(dx: min(12, visible.width * 0.02),
+                                        dy: min(12, visible.height * 0.02))
+        // Convert frame bounds into content bounds instead of subtracting a
+        // hard-coded title bar height; this also handles different window chrome.
+        let minimumSpace = window.contentRect(forFrameRect: placement).size
+        window.contentMinSize = NSSize(width: min(600, max(1, minimumSpace.width)),
+                                       height: min(420, max(1, minimumSpace.height)))
+
+        // Respect user resizing and positioning whenever the complete frame is
+        // already usable on one display, including an intentionally edge-aligned frame.
+        if !initially, containing != nil { return }
+        var fitted = initially
+            ? window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 720, height: 680))
+            : original
+        fitted.size.width = min(fitted.width, placement.width)
+        fitted.size.height = min(fitted.height, placement.height)
+        if initially {
+            fitted.origin = NSPoint(x: placement.midX - fitted.width / 2, y: placement.midY - fitted.height / 2)
+        } else {
+            fitted.origin = NSPoint(x: max(placement.minX, min(fitted.minX, placement.maxX - fitted.width)),
+                                    y: max(placement.minY, min(fitted.minY, placement.maxY - fitted.height)))
+        }
+        if !window.frame.equalTo(fitted) { window.setFrame(fitted, display: window.isVisible) }
     }
 
     func showCandidates(originPID: pid_t? = nil) {

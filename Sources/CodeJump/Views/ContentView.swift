@@ -6,24 +6,51 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var store: AppStore
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "arrow.up.forward.app.fill").font(.system(size: 38)).foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("CodeJump").font(.largeTitle.bold())
-                    Text("指向代码引用，按 \(store.shortcutLabel)，回到编辑器。")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("收起窗口") { NSApp.keyWindow?.close() }
-                    .help("应用继续在菜单栏运行")
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                settingsContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            statusBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.up.forward.app.fill")
+                .font(.system(size: 28)).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CodeJump").font(.title2.bold())
+                Text("指向代码引用，按 \(store.shortcutLabel)，回到编辑器。")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 4) {
+                Button("收起窗口") { NSApp.keyWindow?.close() }
+                    .help("应用继续在菜单栏运行；按 \(store.homeShortcutLabel) 再次打开")
+                Text("主页 \(store.homeShortcutLabel)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 16)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var settingsContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
             if let error = store.error {
                 HStack(alignment: .top) {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
                     Text(error).textSelection(.enabled)
                     Spacer()
-                    Button { store.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                    Button { store.error = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).help("关闭提示")
                 }.padding(12).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
             permissionRow
@@ -45,17 +72,15 @@ struct ContentView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
-                        ScrollView {
-                            VStack(spacing: 0) {
-                                ForEach($store.preferences.projects) { $project in
-                                    ProjectRow(project: $project, onChange: store.projectsChanged) {
-                                        store.preferences.projects.removeAll { $0.id == project.id }
-                                        store.projectsChanged()
-                                    }
-                                    Divider()
+                        VStack(spacing: 0) {
+                            ForEach($store.preferences.projects) { $project in
+                                ProjectRow(project: $project, onChange: store.projectsChanged) {
+                                    store.preferences.projects.removeAll { $0.id == project.id }
+                                    store.projectsChanged()
                                 }
+                                if project.id != store.preferences.projects.last?.id { Divider() }
                             }
-                        }.frame(height: min(220, CGFloat(store.preferences.projects.count) * 82))
+                        }
                     }
                 }.padding(8)
             }.dropDestination(for: URL.self) { urls, _ in store.addProjects(urls); return true }
@@ -83,7 +108,7 @@ struct ContentView: View {
                         Text("⌥J").tag(false); Text("⌘⌥J").tag(true)
                     }.pickerStyle(.segmented).frame(width: 150)
                         .onChange(of: store.preferences.commandOptionShortcut) { _, _ in store.persist(); store.registerShortcut() }
-                    Text("代码 \(store.shortcutLabel) · 项目 \(store.projectShortcutLabel)")
+                    Text("代码 \(store.shortcutLabel) · 项目 \(store.projectShortcutLabel) · 主页 \(store.homeShortcutLabel)")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("每次先显示定位预览", isOn: $store.preferences.previewBeforeOpening)
                         .font(.caption).onChange(of: store.preferences.previewBeforeOpening) { _, _ in store.persist() }
@@ -99,7 +124,11 @@ struct ContentView: View {
                     Button("定位") { store.searchManually() }
                         .disabled(store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.indexing || store.busy)
                 }
-                if !store.lastOpened.isEmpty { Text(store.lastOpened).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                if !store.lastOpened.isEmpty {
+                    Text(store.lastOpened).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                        .help(store.lastOpened)
+                }
             }
             DisclosureGroup("最近一次定位信息") {
                 VStack(alignment: .leading, spacing: 5) {
@@ -111,13 +140,20 @@ struct ContentView: View {
                     Button("测试悬停（3 秒后读取鼠标位置）") { store.testPointerAfterDelay() }
                 }.padding(.top, 6)
             }.font(.caption)
-            HStack {
-                Circle().fill(store.indexing ? .orange : (store.indexReady ? .green : .gray)).frame(width: 6, height: 6)
-                Text(store.status).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("重建索引") { store.refreshIndex() }.font(.caption).disabled(store.indexing)
-            }
-        }.padding(26).frame(minWidth: 640, idealWidth: 720, minHeight: 640)
+        }
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 8) {
+            Circle().fill(store.indexing ? .orange : (store.indexReady ? .green : .gray))
+                .frame(width: 6, height: 6)
+            Text(store.status).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail).help(store.status)
+            Spacer(minLength: 12)
+            Button("重建索引") { store.refreshIndex() }.font(.caption).disabled(store.indexing)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var permissionRow: some View {

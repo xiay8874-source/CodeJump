@@ -8,7 +8,7 @@ import SwiftUI
     var body: some Scene {
         MenuBarExtra("CodeJump", systemImage: "arrow.up.forward.app") {
             Button("切换项目…  \(store.projectShortcutLabel)") { store.showProjectPicker() }
-            Button("项目与设置…") { store.showMainWindow() }
+            Button("主页与设置…  \(store.homeShortcutLabel)") { store.showMainWindow() }
             Button("定位剪贴板中的引用") {
                 store.query = NSPasteboard.general.string(forType: .string) ?? ""
                 store.searchManually()
@@ -29,6 +29,12 @@ import SwiftUI
         AppStore.shared.start()
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // An explicit Finder / Spotlight reopen is a request for the home page.
+        // Ordinary lookup failures and background startup never use this path.
+        AppStore.shared.showMainWindow()
+        return false
+    }
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls { AppStore.shared.handle(url: url) }
     }
