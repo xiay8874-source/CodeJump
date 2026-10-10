@@ -7,6 +7,7 @@ public struct CodeResolver: Sendable {
     private let byAbsolutePath: [String: [IndexedFile]]
     private let byFilename: [String: [IndexedFile]]
     private let byStem: [String: [IndexedFile]]
+    private let declarationCache = DeclarationCache()
     public static let maximumInspectedFiles = 64
     public static let maximumSourceBytes = 2 * 1_024 * 1_024
 
@@ -36,11 +37,12 @@ public struct CodeResolver: Sendable {
             else { continue }
             var candidate = JumpCandidate(project: project, absolutePath: canonical,
                                           relativePath: file.relativePath, line: reference.line,
-                                          column: reference.column, symbol: target.symbol)
+                                          column: reference.column, symbol: reference.symbol)
+            if reference.isFallback { candidate.require("来自邻近文字，未命中鼠标指向的引用；请确认") }
             if reference.contextAmbiguous {
                 candidate.require("链接目标与附近标注不一致，请核对打开位置")
             }
-            if let owner = target.owner, owner != file.stem {
+            if let owner = target.owner, owner.split(separator: ".").first.map(String.init) != file.stem {
                 candidate.require("引用类名 \(owner) 与目标文件 \(file.filename) 不同；请确认是否为内部类或链接目标有误")
             }
             if let revision = reference.revision, !revision.isEmpty {
@@ -73,7 +75,11 @@ public struct CodeResolver: Sendable {
                     candidates.append(candidate)
                     continue
                 }
-                let declarations = JavaDeclarations.find(symbol: symbol, source: source)
+                let declarations = declarationCache.find(path: canonical, symbol: symbol,
+                    owner: target.owner ?? file.stem, source: source)
+                if let signature = reference.parameterSignature, !signature.isEmpty {
+                    candidate.require("引用参数为 (\(signature))；本地词法定位不推断参数类型，请核对签名")
+                }
                 if declarations.isEmpty {
                     candidate.require("未找到 \(symbol) 的 Java 方法声明；确认后仅打开文件")
                     candidate.line = nil; candidate.column = nil
@@ -231,17 +237,14 @@ private struct Target {
         path = reference.path
         symbol = reference.symbol
         if let raw = symbol, !raw.isEmpty {
-            // Parser accepts both Class#method and Class.method, including package-qualified names.
-            let base = String(raw.prefix { $0 != "(" })
-            if let split = base.lastIndex(where: { $0 == "#" || $0 == "." }) {
-                let owner = String(base[..<split])
-                let method = String(base[base.index(after: split)...])
-                self.owner = owner.split(separator: ".").last.map(String.init)
-                if path == nil { path = owner.replacingOccurrences(of: ".", with: "/") }
-                symbol = method
-            } else if path == nil {
-                path = base
-                symbol = nil
+            let base = String(raw.prefix { $0 != "(" }).replacingOccurrences(of: "$", with: ".")
+            let parts = base.split(whereSeparator: { $0 == "#" || $0 == "." }).map(String.init)
+            if let classStart = parts.firstIndex(where: { $0.first?.isUppercase == true }) {
+                let hasMethod = parts.count > classStart + 1 && (parts.last?.first?.isLowercase == true || raw.contains("#") || (reference.parameterSignature != nil && parts.last == parts[classStart]))
+                let ownerParts = hasMethod ? Array(parts.dropLast()) : parts
+                owner = ownerParts[classStart...].joined(separator: ".")
+                if path == nil { path = parts[...classStart].joined(separator: "/") }
+                symbol = hasMethod ? parts.last : nil
             } else {
                 symbol = base
             }
@@ -257,27 +260,31 @@ private enum JavaDeclarations {
     struct Token { let text: String; let line: Int }
     struct Scope { var typeName: String?; var memberStart: Int }
 
-    static func find(symbol: String, source: String) -> [Declaration] {
+    static func find(symbol: String, owner: String, source: String) -> [Declaration] {
         let tokens = tokenize(source)
         var scopes: [Scope] = []
         var globalStart = 0
         var results: [Declaration] = []
+        var parentheses = 0
         for i in tokens.indices {
             let text = tokens[i].text
-            if text == "{" {
+            if text == "(" { parentheses += 1 }
+            if text == ")" { parentheses = max(0, parentheses - 1) }
+            if text == "{", parentheses == 0 {
                 let start = scopes.last?.memberStart ?? globalStart
                 let prefix = Array(tokens[start..<i])
                 let type = declaredType(prefix)
                 scopes.append(Scope(typeName: type, memberStart: i + 1))
-            } else if text == "}" {
+            } else if text == "}", parentheses == 0 {
                 if !scopes.isEmpty { scopes.removeLast() }
                 if !scopes.isEmpty { scopes[scopes.count - 1].memberStart = i + 1 }
                 else { globalStart = i + 1 }
-            } else if text == ";" {
+            } else if text == ";", parentheses == 0 {
                 if !scopes.isEmpty { scopes[scopes.count - 1].memberStart = i + 1 }
                 else { globalStart = i + 1 }
             } else if text == "(", i > 0, tokens[i - 1].text == symbol,
                       let scope = scopes.last, let typeName = scope.typeName,
+                      scopes.compactMap(\.typeName).joined(separator: ".") == owner,
                       let close = closingParen(tokens, from: i),
                       let terminator = declarationTerminator(tokens, after: close),
                       validPrefix(Array(tokens[scope.memberStart..<(i - 1)]), constructor: symbol == typeName) {
@@ -315,7 +322,7 @@ private enum JavaDeclarations {
         for i in from..<min(tokens.count, from + 4_096) {
             if tokens[i].text == "(" { depth += 1 }
             if tokens[i].text == ")" { depth -= 1; if depth == 0 { return i } }
-            if tokens[i].text == "{" || tokens[i].text == ";" { return nil }
+            if tokens[i].text == ";" { return nil }
         }
         return nil
     }
@@ -418,6 +425,25 @@ private enum JavaDeclarations {
             else { i += 1 }
             result.append(Token(text: String(decoding: bytes[start..<i], as: UTF8.self), line: line))
         }
+        return result
+    }
+}
+
+/// Cache by exact bounded source text, so even same-size edits with unchanged mtimes invalidate.
+/// The lock protects Swift's Sendable resolver when used by CLI or multiple tasks.
+private final class DeclarationCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private struct Entry { let source: String; let declarations: [JavaDeclarations.Declaration] }
+    private var entries: [String: Entry] = [:]
+    private var bytes = 0
+    func find(path: String, symbol: String, owner: String, source: String) -> [JavaDeclarations.Declaration] {
+        lock.lock(); defer { lock.unlock() }
+        let key = path + "#" + owner + "#" + symbol
+        if let cached = entries[key], cached.source == source { return cached.declarations }
+        let result = JavaDeclarations.find(symbol: symbol, owner: owner, source: source)
+        if let old = entries.removeValue(forKey: key) { bytes -= old.source.utf8.count }
+        if entries.count >= 64 || bytes + source.utf8.count > 8 * 1_024 * 1_024 { entries.removeAll(); bytes = 0 }
+        entries[key] = Entry(source: source, declarations: result); bytes += source.utf8.count
         return result
     }
 }

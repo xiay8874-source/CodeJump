@@ -11,6 +11,7 @@ struct CandidateView: View {
                 Spacer()
                 Text(store.preferences.editor.displayTitle).font(.caption).foregroundStyle(.secondary)
             }
+            Text(store.captureOrigin).font(.caption2).foregroundStyle(.secondary)
             Text(store.captureText).font(.system(.caption, design: .monospaced)).lineLimit(2)
                 .foregroundStyle(.secondary).textSelection(.enabled)
             ScrollViewReader { proxy in
@@ -40,18 +41,40 @@ struct CandidateView: View {
                                     .background(store.selectedIndex == offset ? Color.accentColor.opacity(0.12) : Color.clear,
                                         in: RoundedRectangle(cornerRadius: 8))
                                     .contentShape(Rectangle())
-                            }.buttonStyle(.plain).id(offset)
+                            }.buttonStyle(.plain).id(offset).onHover { hovering in if hovering { store.selectedIndex = offset } }
                         }
                     }
-                }.frame(maxHeight: 340)
+                }.frame(height: min(220, CGFloat(store.candidates.count) * 112))
                     .onChange(of: store.selectedIndex) { _, value in proxy.scrollTo(value) }
             }
+            Group {
+            if let error = store.previewError { Text(error).font(.caption).foregroundStyle(.secondary) }
+            else if store.previewLines.isEmpty { Text("正在读取代码预览…").font(.caption).foregroundStyle(.secondary) }
+            else {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(store.previewLines) { line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(String(line.number)).foregroundStyle(.secondary).frame(width: 42, alignment: .trailing)
+                                Text(line.text.isEmpty ? " " : line.text).textSelection(.enabled)
+                            }.font(.system(size: 11, design: .monospaced))
+                                .padding(.vertical, 2).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(line.highlighted ? Color.accentColor.opacity(0.14) : .clear)
+                        }
+                    }
+                }
+            }
+            }.frame(height: 135)
             Divider()
             HStack {
                 Text("↑↓ 选择 · 回车打开 · 数字快速选择 · Esc 关闭").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
+                Button("识别反馈…") { store.exportRecognitionFeedback() }.controlSize(.small)
                 Button("取消") { store.dismissCandidates() }.controlSize(.small)
             }
         }.padding(18).frame(width: 570)
+            .task(id: store.candidates.indices.contains(store.selectedIndex) ? store.candidates[store.selectedIndex].id : "") {
+                await store.loadPreview()
+            }
     }
 }

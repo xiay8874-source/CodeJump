@@ -13,16 +13,16 @@ public enum ReferenceParser {
     private static let inlineCode = regex(#"`([^`\r\n]+)`"#)
     private static let quotedPath = regex(#"[\"“]([^\"”\r\n]+)[\"”]"#)
     private static let revisionReference = regex(#"(?<![\w@])([A-Za-z][\w.-]*@[A-Za-z0-9_./-]+:[^\s`<>\"，。]+)"#)
-    private static let absolutePath = regex(#"(?<![\w:/])((?:~/|/)(?=\S)(?:[^\r\n`<>\"|;]*?)\.(?:"# + extensions + ")" + position + #")(?=$|[\s,;，。、)）\]}>])"#)
-    private static let relativePath = regex(#"(?<![\w./:@-])((?:[\p{L}\p{N}_.$@+~()-]+/)*[\p{L}\p{N}_.$@+~-]+\.(?:"# + extensions + ")" + position + #")(?=$|[\s,;，。、)）\]}>])"#)
-    private static let symbolReference = regex(#"(?<![\w./:@-])([A-Z][A-Za-z0-9_$]*(?:[.#][A-Za-z_$][A-Za-z0-9_$]*)*(?::[0-9]+(?:-[0-9]+|:[0-9]+)?|#L[0-9]+(?:-L?[0-9]+)?)?)(?![\w./:#-])"#)
+    private static let absolutePath = regex(#"(?<![\w:/])((?:~/|/)(?=\S)(?:[^\r\n`<>\"|;]*?)\.(?:"# + extensions + ")" + position + #")(?=$|[\s,;，。、)）\]}>行])"#)
+    private static let relativePath = regex(#"(?<![\w./:@-])((?:[\p{L}\p{N}_.$@+~()-]+/)*[\p{L}\p{N}_.$@+~-]+\.(?:"# + extensions + ")" + position + #")(?=$|[\s,;，。、)）\]}>行])"#)
+    private static let symbolReference = regex(#"(?<![A-Za-z0-9_./:@$-])((?:[a-z][A-Za-z0-9_$]*\.)*[A-Z][A-Za-z0-9_$]*(?:[.#][A-Za-z_$][A-Za-z0-9_$]*)*(?:\([^()\r\n]{0,256}\))?(?::[0-9]+(?:-[0-9]+|:[0-9]+)?|#L[0-9]+(?:-L?[0-9]+)?)?)(?![A-Za-z0-9_./:#$-])"#)
     private static let sourceExtension = regex(#"\.(?:"# + extensions + #")(?=$|[^\p{L}\p{N}_])"#, options: [.caseInsensitive])
     private static let fileEnding = regex(#"\.(?:"# + extensions + ")$", options: [.caseInsensitive])
     private static let locationSuffix = regex(#"(?::([0-9]+)(?:-([0-9]+)|:([0-9]+))?|#L([0-9]+)(?:-L?([0-9]+))?)$"#)
     private static let adjacentLines = regex(#"^\s*[（(]\s*(?:第\s*)?([0-9]+)(?:\s*[-–—至]\s*([0-9]+))?\s*行\s*[）)]"#)
     private static let bareClass = regex(#"^[A-Z][A-Za-z0-9_$]*$"#)
     private static let distinctiveClass = regex(#"^[A-Z][A-Za-z0-9_$]*[A-Z][a-z][A-Za-z0-9_$]*$"#)
-    private static let symbolOnly = regex(#"^[A-Z][A-Za-z0-9_$]*(?:[.#][A-Za-z_$][A-Za-z0-9_$]*)*$"#)
+    private static let symbolOnly = regex(#"^(?:[a-z][A-Za-z0-9_$]*\.)*[A-Z][A-Za-z0-9_$]*(?:[.#][A-Za-z_$][A-Za-z0-9_$]*)*$"#)
     private static let projectPrefix = regex(#"^([A-Za-z][A-Za-z0-9_.-]*)\s+/\s+(.+)$"#)
     private static let precedingProject = regex(#"(?:^|\s)([A-Za-z][A-Za-z0-9_.-]*)\s+/\s*$"#)
     private static let revisionPrefix = regex(#"^([A-Za-z][A-Za-z0-9_.-]*)@([A-Za-z0-9_./-]{1,128}):(.+)$"#)
@@ -38,17 +38,22 @@ public enum ReferenceParser {
     }
 
     public static func parse(_ text: String) -> [CodeReference] {
+        var seen = Set<Identity>()
+        return Array(parseLocated(text).map(\.reference).filter { seen.insert(Identity($0)).inserted }.prefix(maximumReferences))
+    }
+
+    public static func parseLocated(_ text: String) -> [LocatedReference] {
         guard !text.isEmpty, text.utf8.prefix(maximumInputBytes + 1).count <= maximumInputBytes else { return [] }
         let original = text as NSString
         let remainder = NSMutableString(string: text)
-        var found: [(Int, CodeReference)] = []
-        var seen = Set<Identity>()
+        var found: [LocatedReference] = []
 
         func mask(_ range: NSRange) {
             remainder.replaceCharacters(in: range, with: String(repeating: " ", count: range.length))
         }
         func record(_ reference: CodeReference?, at range: NSRange, adjacent: Bool = false) {
-            guard var reference, found.count < maximumReferences else { return }
+            guard var reference, found.count < 4096 else { return }
+            var occurrenceRange = range
             if adjacent, reference.line == nil {
                 let tailRange = NSRange(location: NSMaxRange(range), length: min(64, original.length - NSMaxRange(range)))
                 let tail = original.substring(with: tailRange)
@@ -57,6 +62,7 @@ public enum ReferenceParser {
                     reference.line = line
                     reference.endLine = end.value
                     reference.source += (tail as NSString).substring(with: match.range)
+                    occurrenceRange.length += NSMaxRange(match.range)
                 }
             }
             if reference.projectHint == nil {
@@ -64,7 +70,7 @@ public enum ReferenceParser {
                 let prefix = original.substring(with: NSRange(location: start, length: range.location - start))
                 if let hint = first(precedingProject, prefix) { reference.projectHint = group(hint, 1, prefix) }
             }
-            if seen.insert(Identity(reference)).inserted { found.append((range.location, reference)) }
+            found.append(LocatedReference(reference: reference, range: occurrenceRange))
         }
 
         // Accessibility APIs sometimes return an entire document. Ignore oversized individual
@@ -82,8 +88,9 @@ public enum ReferenceParser {
             else if let title = target.range(of: #"\s+[\"'].*[\"']$"#, options: .regularExpression) { target.removeSubrange(title) }
             var ref = atom(target, source: original.substring(with: match.range), allowBareClass: false)
             let label = group(match, 1, text)
-            if let symbol = symbolName(label), first(fileEnding, label) == nil, label.contains("#") || label.contains(".") {
-                if ref?.symbol == nil { ref?.symbol = symbol }
+            if let labelRef = atom(label, source: label, allowBareClass: false), labelRef.path == nil,
+               let symbol = labelRef.symbol, label.contains("#") || label.contains(".") {
+                if ref?.symbol == nil { ref?.symbol = symbol; ref?.parameterSignature = labelRef.parameterSignature }
             }
             record(ref, at: match.range, adjacent: true)
             mask(match.range)
@@ -114,7 +121,7 @@ public enum ReferenceParser {
         // Absolute paths may contain spaces. Relative paths with spaces are supported when quoted,
         // inside a Markdown link, in inline code, or when the whole input is one reference.
         if found.isEmpty, canBeWholeReference(text), let ref = atom(text, source: text, allowBareClass: first(distinctiveClass, text.trimmingCharacters(in: .whitespaces)) != nil) {
-            return [ref]
+            return [LocatedReference(reference: ref, range: NSRange(location: 0, length: original.length))]
         }
         let pathPatterns = first(sourceExtension, String(remainder)) == nil
             ? [symbolReference] : [absolutePath, relativePath, symbolReference]
@@ -125,7 +132,7 @@ public enum ReferenceParser {
                 mask(match.range)
             }
         }
-        return found.sorted { $0.0 < $1.0 }.map(\.1)
+        return found.sorted { $0.range.location < $1.range.location }
     }
 
     private static func atom(_ input: String, source: String, allowBareClass: Bool) -> CodeReference? {
@@ -153,21 +160,28 @@ public enum ReferenceParser {
             line = start; endLine = end.value; column = col.value
             value = (value as NSString).substring(to: suffix.range.location)
         }
+        var signature: String?
+        if let open = value.firstIndex(of: "("), value.hasSuffix(")") {
+            let base = String(value[..<open])
+            guard symbolName(base) != nil else { return nil }
+            signature = String(value[value.index(after: open)..<value.index(before: value.endIndex)])
+            value = base
+        }
         guard safe(value), !value.contains(":"), !value.contains("#"), !value.isEmpty else {
             // A # may be a Java-style method separator, but never part of a file path.
             if !value.contains(":"), let symbol = symbolName(value), value.contains("#") {
-                return CodeReference(source: source, symbol: symbol, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision)
+                return CodeReference(source: source, symbol: symbol, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision, parameterSignature: signature)
             }
             return nil
         }
         if first(fileEnding, value) != nil {
             guard validPath(value) else { return nil }
-            return CodeReference(source: source, path: value, symbol: method, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision)
+            return CodeReference(source: source, path: value, symbol: method, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision, parameterSignature: signature)
         }
         if let symbol = symbolName(value), line != nil || value.contains(".") || allowBareClass {
             // All-caps log levels and constant names are not useful unqualified class references.
             guard value.contains(where: { $0.isLowercase }) else { return nil }
-            return CodeReference(source: source, symbol: symbol, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision)
+            return CodeReference(source: source, symbol: symbol, line: line, endLine: endLine, column: column, projectHint: hint, revision: revision, parameterSignature: signature)
         }
         return nil
     }
@@ -229,10 +243,10 @@ public enum ReferenceParser {
         value.isEmpty ? OptionalLine(value: nil) : positiveInt(value).map { OptionalLine(value: $0) }
     }
     private struct Identity: Hashable {
-        let path: String?, symbol: String?, line: Int?, endLine: Int?, column: Int?, project: String?, revision: String?
+        let path: String?, symbol: String?, line: Int?, endLine: Int?, column: Int?, project: String?, revision: String?, signature: String?
         init(_ reference: CodeReference) {
             path = reference.path; symbol = reference.symbol; line = reference.line; endLine = reference.endLine
-            column = reference.column; project = reference.projectHint; revision = reference.revision
+            column = reference.column; project = reference.projectHint; revision = reference.revision; signature = reference.parameterSignature
         }
     }
     private static func regex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression { try! NSRegularExpression(pattern: pattern, options: options) }

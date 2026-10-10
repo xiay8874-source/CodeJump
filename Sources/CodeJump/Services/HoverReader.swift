@@ -6,6 +6,7 @@ struct CaptureFragment: Sendable {
     let origin: String
     let precise: Bool
     var labels: [String] = []
+    var utf16Offset: Int? = nil
 }
 
 struct HoverCapture: Sendable {
@@ -58,7 +59,7 @@ enum HoverReader {
                 }
             }
             if depth == 0, let nearby = textAtPosition(element, point: CGPoint(x: x, y: y)) {
-                fragments.append(CaptureFragment(text: nearby, origin: "鼠标附近文字", precise: false))
+                fragments.append(CaptureFragment(text: nearby.text, origin: "鼠标字符位置", precise: true, utf16Offset: nearby.offset))
             }
             for name in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
                 guard let value = string(element, name as CFString), !value.isEmpty, value.utf16.count <= 4096 else { continue }
@@ -69,12 +70,13 @@ enum HoverReader {
             current = parent.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
         }
         var seen = Set<String>()
-        fragments = fragments.filter { seen.insert($0.text).inserted }
+        fragments = fragments.filter { seen.insert("\($0.origin):\($0.text)").inserted }
         fragments = fragments.enumerated().sorted {
             func rank(_ fragment: CaptureFragment) -> Int {
                 if fragment.origin == "引用链接" { return 0 }
                 if fragment.origin == "选中文字" { return 1 }
-                return fragment.precise ? 2 : 3
+                if fragment.utf16Offset != nil { return 2 }
+                return fragment.precise ? 3 : 4
             }
             let left = rank($0.element), right = rank($1.element)
             return left == right ? $0.offset < $1.offset : left < right
@@ -93,7 +95,7 @@ enum HoverReader {
         attribute(element, name) as? String
     }
 
-    private static func textAtPosition(_ element: AXUIElement, point: CGPoint) -> String? {
+    private static func textAtPosition(_ element: AXUIElement, point: CGPoint) -> (text: String, offset: Int)? {
         var point = point
         guard let parameter = AXValueCreate(.cgPoint, &point) else { return nil }
         var output: CFTypeRef?
@@ -103,14 +105,16 @@ enum HoverReader {
         guard AXValueGetValue(output as! AXValue, .cfRange, &range), range.location >= 0 else { return nil }
         // Ask for a bounded window around the pointer, never the full document.
         let total = (attribute(element, kAXNumberOfCharactersAttribute as CFString) as? NSNumber)?.intValue
-        let start = max(0, range.location - 100)
-        let end = min(range.location + 120, total ?? (range.location + max(1, range.length)))
+        let pointerOffset = range.location
+        let start = max(0, range.location - 512)
+        let end = min(range.location + 512, total ?? (range.location + max(1, range.length)))
         guard end > start else { return nil }
         range = CFRange(location: start, length: end - start)
         guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
         var text: CFTypeRef?
         guard AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString,
               rangeValue, &text) == .success else { return nil }
-        return text as? String
+        guard let text = text as? String else { return nil }
+        return (text, pointerOffset - start)
     }
 }

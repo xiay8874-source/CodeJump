@@ -1,0 +1,19 @@
+<idea-plugin>
+  <id>com.xiay8874.codejump.idea</id>
+  <name>CodeJump Companion</name>
+  <version>0.2.0</version>
+  <vendor>xiay8874</vendor>
+  <description>Local authenticated code navigation for CodeJump. Resolves Java classes, overloads, inheritance and library declarations through PSI.</description>
+  <idea-version since-build="261" until-build="261.*"/>
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.java</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <applicationService serviceImplementation="com.xiay8874.codejump.BridgeService"/>
+    <postStartupActivity implementation="com.xiay8874.codejump.BridgeStartup"/>
+  </extensions>
+  <actions>
+    <action id="CodeJump.StartBridge" class="com.xiay8874.codejump.StartBridgeAction" text="Start CodeJump Bridge" description="Enable local code navigation for CodeJump">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </action>
+  </actions>
+</idea-plugin>

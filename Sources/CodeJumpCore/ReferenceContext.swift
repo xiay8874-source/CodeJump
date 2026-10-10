@@ -76,12 +76,12 @@ public enum ReferenceContext {
                 }
             }
             if let symbol = candidate.symbol, symbol.contains("#") || symbol.contains(".") {
-                return symbol.split(whereSeparator: { $0 == "#" || $0 == "." }).first.map(String.init) == targetClass
+                return ownerClass(symbol) == targetClass
             }
             return true
         }
         guard let symbol = candidate.symbol else { return false }
-        return symbol.split(whereSeparator: { $0 == "#" || $0 == "." }).first.map(String.init) == targetClass
+        return ownerClass(symbol) == targetClass
     }
 
     private static func matchesProject(_ hint: String?, reference: CodeReference, path: String) -> Bool {
@@ -91,11 +91,16 @@ public enum ReferenceContext {
     }
     private static func method(_ symbol: String?, className: String) -> String? {
         guard let symbol, !symbol.isEmpty, symbol != className else { return nil }
+        if ownerClass(symbol) == className, let last = symbol.split(whereSeparator: { $0 == "#" || $0 == "." }).last,
+           String(last) != className { return String(last) }
         for separator in ["#", "."] {
             let prefix = className + separator
             if symbol.hasPrefix(prefix) { return String(symbol.dropFirst(prefix.count)) }
         }
         return symbol
+    }
+    private static func ownerClass(_ symbol: String) -> String? {
+        symbol.split(whereSeparator: { $0 == "#" || $0 == "." }).first(where: { $0.first?.isUppercase == true }).map(String.init)
     }
     private static func basename(_ path: String) -> String { (path as NSString).lastPathComponent }
     private static func dropRelativePrefix(_ path: String) -> String {

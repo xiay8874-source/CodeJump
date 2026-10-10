@@ -26,11 +26,15 @@ actor IndexService {
         } else {
             newIndex = try ProjectIndex.build(projects: projects)
         }
-        index = newIndex
+        // Content-only saves leave the path lookup tables and disk index untouched.
+        // The resolver verifies current source contents on every query.
+        if index.projects != newIndex.projects || index.files != newIndex.files {
+            index = newIndex
+            resolver = CodeResolver(index: newIndex)
+            let data = try JSONEncoder().encode(newIndex)
+            try data.write(to: cacheURL, options: .atomic)
+        }
         appliedGeneration = generation
-        resolver = CodeResolver(index: newIndex)
-        let data = try JSONEncoder().encode(newIndex)
-        try data.write(to: cacheURL, options: .atomic)
         return (newIndex.files.count, Date().timeIntervalSince(started) * 1000)
     }
 

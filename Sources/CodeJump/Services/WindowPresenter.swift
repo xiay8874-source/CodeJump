@@ -129,13 +129,15 @@ import SwiftUI
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let size = panel.contentView?.fittingSize ?? NSSize(width: 606, height: 350)
-        panel.setContentSize(NSSize(width: 606, height: min(max(size.height, 220), 520)))
+        panel.setContentSize(NSSize(width: 606, height: min(max(size.height, 220), min(projectMode ? 520 : 680, area.height - 40))))
         panel.setFrameOrigin(NSPoint(x: min(max(pointer.x + 12, area.minX), area.maxX - panel.frame.width),
             y: min(max(pointer.y - panel.frame.height - 12, area.minY), area.maxY - panel.frame.height)))
         candidatePanel = panel
         NSApp.activate(); panel.makeKeyAndOrderFront(nil)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.candidatePanel?.isKeyWindow == true else { return event }
+            // Let the field editor finish Chinese/Japanese composition before handling navigation.
+            if let input = self.candidatePanel?.firstResponder as? NSTextView, input.hasMarkedText() { return event }
             if projectMode {
                 if event.modifierFlags.contains(.command), let text = event.charactersIgnoringModifiers,
                    let number = Int(text), (1...9).contains(number) {

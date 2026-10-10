@@ -327,14 +327,15 @@ struct IndexResolverTests {
             let resolver = CodeResolver(index: try ProjectIndex.build(projects: [ProjectRoot(name: "P", path: root.path)]))
             let wrong = try #require(ReferenceParser.parse("[Other#target](\(file.path):2)").first)
             let candidate = try #require(resolver.resolve(wrong).first)
-            #expect(candidate.line == 2)
+            #expect(candidate.line == nil)
             #expect(candidate.requiresConfirmation)
             #expect(candidate.reason.contains("引用类名 Other"))
             let correct = try #require(resolver.resolve(CodeReference(source: "", path: "Foo.java", symbol: "Foo.target", line: 2)).first)
             #expect(!correct.requiresConfirmation)
             let nested = try #require(resolver.resolve(CodeReference(source: "", path: "Foo.java", symbol: "Foo.Inner.target", line: 2)).first)
             #expect(nested.requiresConfirmation)
-            #expect(nested.reason.contains("引用类名 Inner"))
+            #expect(nested.line == nil)
+            #expect(nested.reason.contains("未找到"))
         }
     }
 }

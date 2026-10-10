@@ -22,10 +22,9 @@ final class HotKeyService: @unchecked Sendable {
     }
 
     @MainActor
-    func register(commandOption: Bool = false) -> Bool {
+    func register(commandOption: Bool = false) -> [String] {
         unregister()
-        var complete = false
-        defer { if !complete { unregister() } }
+        var failed: [String] = []
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let pointer = Unmanaged.passUnretained(self).toOpaque()
         let handlerStatus = InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
@@ -48,20 +47,19 @@ final class HotKeyService: @unchecked Sendable {
             Task { @MainActor in action() }
             return noErr
         }, 1, &type, pointer, &handler)
-        guard handlerStatus == noErr, handler != nil else { return false }
+        guard handlerStatus == noErr, handler != nil else { unregister(); return ["J", "P", "H"] }
 
         let modifiers = UInt32(optionKey | (commandOption ? cmdKey : 0))
         let navigateStatus = RegisterEventHotKey(UInt32(kVK_ANSI_J), modifiers,
             EventHotKeyID(signature: Self.signature, id: 1), GetApplicationEventTarget(), 0, &navigateHotKey)
-        guard navigateStatus == noErr, navigateHotKey != nil else { return false }
+        if navigateStatus != noErr || navigateHotKey == nil { failed.append("J") }
         let projectStatus = RegisterEventHotKey(UInt32(kVK_ANSI_P), modifiers,
             EventHotKeyID(signature: Self.signature, id: 2), GetApplicationEventTarget(), 0, &projectHotKey)
-        guard projectStatus == noErr, projectHotKey != nil else { return false }
+        if projectStatus != noErr || projectHotKey == nil { failed.append("P") }
         let homeStatus = RegisterEventHotKey(UInt32(kVK_ANSI_H), modifiers,
             EventHotKeyID(signature: Self.signature, id: 3), GetApplicationEventTarget(), 0, &homeHotKey)
-        guard homeStatus == noErr, homeHotKey != nil else { return false }
-        complete = true
-        return true
+        if homeStatus != noErr || homeHotKey == nil { failed.append("H") }
+        return failed
     }
 
     @MainActor

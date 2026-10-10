@@ -116,6 +116,22 @@ struct ContentView: View {
                 Spacer()
             }
             Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("使用可选 IDEA 插件（PSI、继承方法与依赖类）", isOn: $store.preferences.ideaPluginEnabled)
+                    .onChange(of: store.preferences.ideaPluginEnabled) { _, _ in store.persist(); store.checkPlugin() }
+                HStack {
+                    Text(store.pluginStatus).font(.caption).foregroundStyle(.secondary)
+                    Button("检查连接") { store.checkPlugin() }.controlSize(.small)
+                }
+            }
+            Picker("本次搜索范围", selection: $store.scopeProjectID) {
+                Text("全部已启用项目").tag(nil as UUID?)
+                ForEach(store.preferences.projects.filter(\.enabled)) { project in
+                    Text(project.name + " · " + project.path).tag(Optional(project.id))
+                }
+            }
+            Toggle("记住来源应用常用的项目（仅排序，不排除其他项目）", isOn: $store.preferences.rememberSourceProject)
+                .onChange(of: store.preferences.rememberSourceProject) { _, _ in store.persist() }
             VStack(alignment: .leading, spacing: 8) {
                 Text("手动定位").font(.headline)
                 HStack {
@@ -130,6 +146,18 @@ struct ContentView: View {
                         .help(store.lastOpened)
                 }
             }
+            DisclosureGroup("最近跳转（重新核对后打开）") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(store.preferences.recentJumps) { recent in
+                        Button { store.reopen(recent) } label: {
+                            Text(recent.path + (recent.line.map { ":\($0)" } ?? ""))
+                                .lineLimit(1).truncationMode(.middle)
+                        }.buttonStyle(.link).help(recent.path)
+                    }
+                    if store.preferences.recentJumps.isEmpty { Text("还没有跳转记录").foregroundStyle(.secondary) }
+                    else { Button("清空记录") { store.preferences.recentJumps = []; store.persist() } }
+                }.padding(.top, 6)
+            }
             DisclosureGroup("最近一次定位信息") {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(store.captureOrigin.isEmpty ? "按快捷键后显示识别结果" : store.captureOrigin)
@@ -137,6 +165,7 @@ struct ContentView: View {
                         .lineLimit(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Text("读取 \(store.captureMilliseconds, specifier: "%.0f") ms · 查询 \(store.queryMilliseconds, specifier: "%.1f") ms · 索引 \(store.indexMilliseconds, specifier: "%.0f") ms")
                         .foregroundStyle(.secondary).font(.caption)
+                    Button("识别错了？保存本地反馈…") { store.exportRecognitionFeedback() }
                     Button("测试悬停（3 秒后读取鼠标位置）") { store.testPointerAfterDelay() }
                 }.padding(.top, 6)
             }.font(.caption)

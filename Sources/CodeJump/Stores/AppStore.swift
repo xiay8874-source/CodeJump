@@ -11,10 +11,14 @@ struct Preferences: Codable {
     var commandOptionShortcut = false
     var previewBeforeOpening = false
     var projectUsage: [String: ProjectUsage] = [:]
+    var recentJumps: [RecentJump] = []
+    var rememberSourceProject = false
+    var sourceProjects: [String: UUID] = [:]
+    var ideaPluginEnabled = false
 
     init() {}
     private enum CodingKeys: String, CodingKey {
-        case projects, editor, customApplicationPath, commandOptionShortcut, previewBeforeOpening, projectUsage
+        case projects, editor, customApplicationPath, commandOptionShortcut, previewBeforeOpening, projectUsage, recentJumps, rememberSourceProject, sourceProjects, ideaPluginEnabled
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,6 +28,10 @@ struct Preferences: Codable {
         commandOptionShortcut = try values.decodeIfPresent(Bool.self, forKey: .commandOptionShortcut) ?? false
         previewBeforeOpening = try values.decodeIfPresent(Bool.self, forKey: .previewBeforeOpening) ?? false
         projectUsage = try values.decodeIfPresent([String: ProjectUsage].self, forKey: .projectUsage) ?? [:]
+        recentJumps = Array((try values.decodeIfPresent([RecentJump].self, forKey: .recentJumps) ?? []).prefix(30))
+        rememberSourceProject = try values.decodeIfPresent(Bool.self, forKey: .rememberSourceProject) ?? false
+        sourceProjects = try values.decodeIfPresent([String: UUID].self, forKey: .sourceProjects) ?? [:]
+        ideaPluginEnabled = try values.decodeIfPresent(Bool.self, forKey: .ideaPluginEnabled) ?? false
     }
 }
 
@@ -49,6 +57,13 @@ struct Preferences: Codable {
     @Published var lastOpened = ""
     @Published var projectQuery = ""
     @Published var selectedProjectIndex = 0
+    @Published var scopeProjectID: UUID? = nil
+    @Published var previewLines: [PreviewLine] = []
+    @Published var previewError: String?
+    private var sourceApplicationID: String?
+    private var lastReferences: [CodeReference] = []
+    private let ideaBridge = IDEABridge()
+    @Published var pluginStatus = "未检查"
     private var hotKey: HotKeyService?
     private var watcher: ProjectWatcher?
     private var refreshTask: Task<Void, Never>?
@@ -103,8 +118,9 @@ struct Preferences: Codable {
     }
 
     func registerShortcut() {
-        shortcutRegistered = hotKey?.register(commandOption: preferences.commandOptionShortcut) ?? false
-        if !shortcutRegistered { error = "快捷键注册失败。请改用另一个组合，或检查其他应用是否占用。" }
+        let failed = hotKey?.register(commandOption: preferences.commandOptionShortcut) ?? ["J", "P", "H"]
+        shortcutRegistered = !failed.contains("J")
+        if !failed.isEmpty { error = "以下快捷键被占用：" + failed.map { (preferences.commandOptionShortcut ? "⌘⌥" : "⌥") + $0 }.joined(separator: "、") + "。其他快捷键仍可使用。" }
     }
 
     func checkPermission() { accessibilityGranted = HoverReader.isTrusted }
@@ -120,7 +136,11 @@ struct Preferences: Codable {
     func toggleMainWindow() { checkPermission(); windows.toggleMain() }
 
     private func recordInteractionOrigin() {
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let application = NSWorkspace.shared.frontmostApplication
+        if application?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            sourceApplicationID = application?.bundleIdentifier
+        }
+        let pid = application?.processIdentifier
         interactionOriginPID = pid == ProcessInfo.processInfo.processIdentifier ? nil : pid
     }
 
@@ -155,7 +175,7 @@ struct Preferences: Codable {
             do {
                 let plan = try EditorLaunchPlan.project(project: project, editor: editor, applicationPath: applicationPath)
                 let focused = await Task.detached(priority: .userInitiated) {
-                    await ProjectWindowFocus.focus(project: project, editor: editor, configuredProjects: configured)
+                    await ProjectWindowFocus.focus(project: project, editor: editor, configuredProjects: configured, applicationPath: applicationPath)
                 }.value
                 guard generation == searchGeneration else { return }
                 if !focused { try launch(plan, editor: editor) }
@@ -197,7 +217,10 @@ struct Preferences: Codable {
         projectsChanged()
     }
 
-    func projectsChanged() { persist(); configureWatcher(); refreshIndex() }
+    func projectsChanged() {
+        if let id = scopeProjectID, !preferences.projects.contains(where: { $0.id == id && $0.enabled }) { scopeProjectID = nil }
+        persist(); configureWatcher(); refreshIndex()
+    }
 
     private func configureWatcher() {
         watcher = ProjectWatcher(paths: preferences.projects.filter(\.enabled).map(\.path)) { [weak self] paths in
@@ -248,23 +271,45 @@ struct Preferences: Codable {
             }.value
             guard generation == searchGeneration else { return }
             captureMilliseconds = capture.elapsedMilliseconds
+            var primary: [CodeReference] = []
+            var fallback: [CodeReference] = []
+            var primaryText = ""
+            var primaryOrigin = ""
             for fragment in capture.fragments {
-                var references = ReferenceParser.parse(fragment.text)
-                if references.isEmpty, fragment.precise, let label = ReferenceParser.parseClassLabel(fragment.text) {
-                    references = [label]
-                }
+                var references = ReferenceSelection.select(text: fragment.text, utf16Offset: fragment.utf16Offset)
+                if references.isEmpty, fragment.precise, fragment.utf16Offset == nil,
+                   let label = ReferenceParser.parseClassLabel(fragment.text) { references = [label] }
                 if fragment.origin == "引用链接" {
                     references = references.map { ReferenceContext.enrich($0, labels: fragment.labels) }
                 }
                 guard !references.isEmpty else { continue }
-                let result = await service.resolve(references)
+                if primary.isEmpty, fragment.precise, !references.contains(where: \.isFallback) {
+                    primary = references; primaryText = fragment.text; primaryOrigin = fragment.origin
+                } else {
+                    fallback += references.map { var ref = $0; ref.isFallback = true; return ref }
+                }
+            }
+            if !primary.isEmpty {
+                let result = await resolveScoped(primary)
                 guard generation == searchGeneration else { return }
-                guard !result.0.isEmpty else { continue }
-                captureText = fragment.text; captureOrigin = "\(capture.application) · \(fragment.origin)"
-                finishResolution(references, result: result, precise: fragment.precise)
-                return
+                captureText = primaryText; captureOrigin = "\(capture.application) · \(primaryOrigin)"
+                if !result.0.isEmpty {
+                    finishResolution(primary, result: result, precise: true)
+                    return
+                }
+            }
+            if !fallback.isEmpty {
+                let result = await resolveScoped(Array(fallback.prefix(128)))
+                guard generation == searchGeneration else { return }
+                if !result.0.isEmpty {
+                    captureText = primaryText.isEmpty ? (capture.fragments.first?.text ?? "") : primaryText
+                    captureOrigin = "\(capture.application) · 邻近引用（精准目标未匹配）"
+                    finishResolution(fallback, result: result, precise: false)
+                    return
+                }
             }
             busy = false; captureText = capture.fragments.first?.text ?? ""; captureOrigin = name
+            lastReferences = primary + fallback; candidates = []
             feedback("未识别到代码位置，选中完整引用后按 \(shortcutLabel) 重试。")
         }
     }
@@ -274,7 +319,10 @@ struct Preferences: Codable {
         guard !indexing && indexReady else { feedback("请等待索引完成，或重新索引。"); return }
         var references = ReferenceParser.parse(query)
         if references.isEmpty, let label = ReferenceParser.parseClassLabel(query) { references = [label] }
-        guard !references.isEmpty else { feedback("未识别到文件路径、类名或方法引用。"); return }
+        guard !references.isEmpty else {
+            captureText = query; captureOrigin = "手动输入 · 未识别"; lastReferences = []; candidates = []
+            feedback("未识别到文件路径、类名或方法引用。"); return
+        }
         busy = true; error = nil
         searchGeneration += 1
         let generation = searchGeneration
@@ -299,12 +347,31 @@ struct Preferences: Codable {
     private func resolve(_ references: [CodeReference], text: String, origin: String, precise: Bool, generation: Int) async {
         guard generation == searchGeneration else { return }
         captureText = text; captureOrigin = origin
-        let result = await service.resolve(references)
+        let result = await resolveScoped(references)
         guard generation == searchGeneration else { return }
         finishResolution(references, result: result, precise: precise)
     }
 
+    private func resolveScoped(_ references: [CodeReference]) async -> ([JumpCandidate], Double) {
+        let result = await service.resolve(references)
+        let enabled = preferences.projects.filter { $0.enabled && (scopeProjectID == nil || $0.id == scopeProjectID) }
+        let plugin = preferences.ideaPluginEnabled && preferences.editor == .idea
+            ? await ideaBridge.resolve(references, projects: enabled, applicationPath: preferences.customApplicationPath) : []
+        let scoped = plugin + result.0.filter { candidate in
+            (scopeProjectID == nil || candidate.project.id == scopeProjectID)
+            && !plugin.contains(where: { $0.project.id == candidate.project.id && $0.absolutePath == candidate.absolutePath && $0.line == candidate.line })
+        }
+        let preferred = preferences.rememberSourceProject ? sourceApplicationID.flatMap { preferences.sourceProjects[$0] } : nil
+        let sorted = scoped.enumerated().sorted {
+            let left = $0.element.project.id == preferred, right = $1.element.project.id == preferred
+            return left == right ? $0.offset < $1.offset : left
+        }.map(\.element)
+        return (sorted, result.1)
+    }
+
     private func finishResolution(_ references: [CodeReference], result: ([JumpCandidate], Double), precise: Bool) {
+        lastReferences = references
+        previewLines = []; previewError = nil
         queryMilliseconds = result.1
         candidates = result.0; selectedIndex = 0; busy = false
         log.info("resolve refs=\(references.count) candidates=\(result.0.count) elapsed_ms=\(result.1)")
@@ -332,15 +399,106 @@ struct Preferences: Codable {
         // A newly started IDE may keep this process alive for hours. Its lifetime
         // must never lock subsequent navigation; only debounce accidental double triggers.
         guard Date().timeIntervalSince(lastLaunchTime) >= 0.35 else { return }
+        if candidate.pluginTarget != nil {
+            lastLaunchTime = Date()
+            Task {
+                do {
+                    try await ideaBridge.navigate(candidate, applicationPath: preferences.customApplicationPath)
+                    windows.dismissCandidates(); recordOpened(candidate)
+                    status = "已请求 IDEA 按当前声明定位"
+                } catch { feedback("IDEA 插件目标已失效或未连接，请重新定位。") }
+            }
+            return
+        }
         do {
+            guard preferences.projects.contains(where: { $0.id == candidate.project.id && $0.enabled && $0.path == candidate.project.path }) else {
+                feedback("项目范围已变化，请重新定位。"); return
+            }
             let plan = try EditorLaunchPlan.make(candidate: candidate, editor: preferences.editor,
                 applicationPath: preferences.customApplicationPath)
             try launch(plan, editor: preferences.editor)
             windows.dismissCandidates()
-            lastOpened = "\(candidate.project.name) / \(candidate.relativePath)\(candidate.line.map { ":\($0)" } ?? "")"
+            recordOpened(candidate)
         } catch {
             feedback("打开失败：\(error.localizedDescription)")
         }
+    }
+
+    private func recordOpened(_ candidate: JumpCandidate) {
+        preferences.recentJumps.removeAll { $0.projectID == candidate.project.id && $0.path == candidate.absolutePath && $0.symbol == candidate.symbol && $0.line == candidate.line }
+        preferences.recentJumps.insert(RecentJump(candidate: candidate), at: 0)
+        preferences.recentJumps = Array(preferences.recentJumps.prefix(30))
+        if preferences.rememberSourceProject, let sourceApplicationID {
+            preferences.sourceProjects[sourceApplicationID] = candidate.project.id
+        }
+        persist()
+        lastOpened = "\(candidate.project.name) / \(candidate.relativePath)\(candidate.line.map { ":\($0)" } ?? "")"
+    }
+
+    func checkPlugin() {
+        Task {
+            let count = await ideaBridge.connected(applicationPath: preferences.customApplicationPath)
+            pluginStatus = count > 0 ? "已连接 \(count) 个 IDEA 实例" : "未连接；安装插件后在 IDEA 的 Tools 菜单启动 CodeJump Bridge"
+        }
+    }
+
+    func loadPreview() async {
+        guard candidates.indices.contains(selectedIndex) else { return }
+        let candidate = candidates[selectedIndex]
+        previewLines = []; previewError = nil
+        if let target = candidate.pluginTarget {
+            let lines = await ideaBridge.preview(target)
+            guard !Task.isCancelled, candidates.indices.contains(selectedIndex), candidates[selectedIndex].id == candidate.id else { return }
+            previewLines = lines
+            if lines.isEmpty { previewError = "此 IDEA 声明没有可用源码预览" }
+            return
+        }
+        let result = await Task.detached(priority: .userInitiated) { Result { try SourcePreview.read(candidate) } }.value
+        guard !Task.isCancelled, candidates.indices.contains(selectedIndex), candidates[selectedIndex].id == candidate.id else { return }
+        switch result {
+        case .success(let lines): previewLines = lines
+        case .failure: previewError = "无法预览：文件已变化、超出大小上限或不是 UTF-8 文本。"
+        }
+    }
+
+    func reopen(_ recent: RecentJump) {
+        guard preferences.projects.contains(where: { $0.id == recent.projectID && $0.enabled }) else {
+            feedback("此记录的项目已移除或停用。"); return
+        }
+        recordInteractionOrigin(); searchGeneration += 1
+        let generation = searchGeneration
+        Task {
+            let reference = recent.path.hasPrefix("jar://")
+                ? CodeReference(source: recent.path, symbol: recent.symbol, isFallback: true) : recent.reference
+            let local = await service.resolve([reference])
+            let project = preferences.projects.filter { $0.id == recent.projectID && $0.enabled }
+            let plugin = preferences.ideaPluginEnabled && preferences.editor == .idea
+                ? await ideaBridge.resolve([reference], projects: project, applicationPath: preferences.customApplicationPath) : []
+            let result = (plugin + local.0, local.1)
+            guard generation == searchGeneration else { return }
+            captureText = recent.path; captureOrigin = "最近跳转 · 已重新核对当前源码"
+            finishResolution([recent.reference], result: (result.0.filter { $0.project.id == recent.projectID }, result.1), precise: false)
+        }
+    }
+
+    func exportRecognitionFeedback() {
+        let panel = NSSavePanel()
+        panel.title = "保存本次识别反馈（仅本地）"
+        panel.nameFieldStringValue = "CodeJump-feedback.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        struct Report: Encodable {
+            var capturedText: String; var origin: String
+            var references: [CodeReference]; var candidates: [JumpCandidate]
+            var expectedLocation = "请填写期望打开的文件、方法或行号"
+        }
+        do {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(Report(capturedText: captureText, origin: captureOrigin,
+                references: lastReferences, candidates: candidates.map {
+                    var value = $0; value.pluginTarget = nil; value.pluginEndpoint = nil; return value
+                })).write(to: url, options: .atomic)
+            status = "识别反馈已保存到本地"
+        } catch { self.error = "反馈保存失败：\(error.localizedDescription)" }
     }
 
     private func launch(_ plan: EditorLaunchPlan, editor: EditorKind) throws {

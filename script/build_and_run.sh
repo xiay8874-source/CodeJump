@@ -19,8 +19,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>com.xiay8874.CodeJump</string>
   <key>CFBundleName</key><string>CodeJump</string>
   <key>CFBundleDisplayName</key><string>CodeJump</string>
-  <key>CFBundleShortVersionString</key><string>0.1.2</string>
-  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>4</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
