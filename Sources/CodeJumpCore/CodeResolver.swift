@@ -24,7 +24,17 @@ public struct CodeResolver: Sendable {
     public func resolve(_ reference: CodeReference) -> [JumpCandidate] {
         let target = Target(reference)
         guard let path = target.path, !path.isEmpty else { return [] }
-        let files = matchingFiles(path: path, projectHint: reference.projectHint)
+        var files = matchingFiles(path: path, projectHint: reference.projectHint)
+        var abbreviatedClass = false
+        if files.isEmpty, reference.path == nil, target.symbol == nil, !path.contains("/"), path.count >= 8 {
+            // Agent prose sometimes abbreviates a long class to its CamelCase suffix.
+            // This is a suggestion path only, never an exact hit or automatic jump.
+            for name in byStem.keys.sorted() where name != path && name.hasSuffix(path) {
+                files += matchingFiles(path: name, projectHint: reference.projectHint)
+                if files.count >= 64 { break }
+            }
+            files = Array(files.prefix(64)); abbreviatedClass = !files.isEmpty
+        }
         var candidates: [JumpCandidate] = []
         for (offset, file) in files.enumerated() {
             guard let project = projects[file.projectID] else { continue }
@@ -37,12 +47,13 @@ public struct CodeResolver: Sendable {
             else { continue }
             var candidate = JumpCandidate(project: project, absolutePath: canonical,
                                           relativePath: file.relativePath, line: reference.line,
-                                          column: reference.column, symbol: reference.symbol)
+                                          column: reference.column, symbol: abbreviatedClass ? file.stem : reference.symbol)
+            if abbreviatedClass { candidate.require("未找到名为 \(path) 的类；这是类名后缀匹配，请选择完整类名（最多 64 项）") }
             if reference.isFallback { candidate.require("来自邻近文字，未命中鼠标指向的引用；请确认") }
             if reference.contextAmbiguous {
                 candidate.require("链接目标与附近标注不一致，请核对打开位置")
             }
-            if let owner = target.owner, owner.split(separator: ".").first.map(String.init) != file.stem {
+            if !abbreviatedClass, let owner = target.owner, owner.split(separator: ".").first.map(String.init) != file.stem {
                 candidate.require("引用类名 \(owner) 与目标文件 \(file.filename) 不同；请确认是否为内部类或链接目标有误")
             }
             if let revision = reference.revision, !revision.isEmpty {

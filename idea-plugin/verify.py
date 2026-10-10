@@ -4,6 +4,7 @@ import argparse, json, pathlib, urllib.request, urllib.error
 p=argparse.ArgumentParser()
 p.add_argument('--project', required=True)
 p.add_argument('--navigate', action='store_true')
+p.add_argument('--bare-method', help='Check and optionally navigate an unqualified project method')
 args=p.parse_args()
 entries=list((pathlib.Path.home()/'Library/Application Support/CodeJump/idea').glob('*.json'))
 assert entries, 'Start CodeJump Bridge in IDEA first'
@@ -30,6 +31,13 @@ status,batch=call('resolve',{'requests':[{'project':args.project,'symbol':'java.
 assert status==200 and len(batch)==1
 result={'authentication':'passed','browserOrigin':'rejected','expiredTarget':'rejected','projectBoundary':'passed',
         'overloads':len(overloads),'signature':'substring(int, int)','inherited':'java.util.Collection#stream','batch':'passed'}
+if args.bare_method:
+    status,bare=call('resolve',{'project':args.project,'symbol':args.bare_method})
+    assert status==200 and bare, bare
+    assert all(r['symbol'].endswith('#'+args.bare_method) for r in bare)
+    result['bareMethod']=[{k:r[k] for k in ['symbol','path','line']} for r in bare]
+    if args.navigate:
+        exact=[bare[0]]
 if args.navigate:
     assert call('navigate',{'target':exact[0]['target']})[0]==200
     status,selected=call('selection')

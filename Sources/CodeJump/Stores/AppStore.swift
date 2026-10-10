@@ -277,8 +277,8 @@ struct Preferences: Codable {
             var primaryOrigin = ""
             for fragment in capture.fragments {
                 var references = ReferenceSelection.select(text: fragment.text, utf16Offset: fragment.utf16Offset)
-                if references.isEmpty, fragment.precise, fragment.utf16Offset == nil,
-                   let label = ReferenceParser.parseClassLabel(fragment.text) { references = [label] }
+                if fragment.precise, fragment.utf16Offset == nil,
+                   let label = ReferenceParser.parseExplicitLabel(fragment.text) { references = [label] }
                 if fragment.origin == "引用链接" {
                     references = references.map { ReferenceContext.enrich($0, labels: fragment.labels) }
                 }
@@ -310,7 +310,9 @@ struct Preferences: Codable {
             }
             busy = false; captureText = capture.fragments.first?.text ?? ""; captureOrigin = name
             lastReferences = primary + fallback; candidates = []
-            feedback("未识别到代码位置，选中完整引用后按 \(shortcutLabel) 重试。")
+            if !primary.isEmpty {
+                feedback("已识别引用，但没有找到声明。裸方法名需要已连接的 IDEA 插件和已打开的项目。")
+            } else { feedback("未识别到代码位置，选中完整引用后按 \(shortcutLabel) 重试。") }
         }
     }
 
@@ -318,7 +320,7 @@ struct Preferences: Codable {
         recordInteractionOrigin()
         guard !indexing && indexReady else { feedback("请等待索引完成，或重新索引。"); return }
         var references = ReferenceParser.parse(query)
-        if references.isEmpty, let label = ReferenceParser.parseClassLabel(query) { references = [label] }
+        if references.isEmpty, let label = ReferenceParser.parseExplicitLabel(query) { references = [label] }
         guard !references.isEmpty else {
             captureText = query; captureOrigin = "手动输入 · 未识别"; lastReferences = []; candidates = []
             feedback("未识别到文件路径、类名或方法引用。"); return
@@ -376,7 +378,9 @@ struct Preferences: Codable {
         candidates = result.0; selectedIndex = 0; busy = false
         log.info("resolve refs=\(references.count) candidates=\(result.0.count) elapsed_ms=\(result.1)")
         guard !candidates.isEmpty else {
-            feedback("已启用项目中没有匹配，请补充项目名或完整路径。"); return
+            feedback(references.contains(where: { $0.path == nil && $0.symbol?.first?.isLowercase == true && !($0.symbol?.contains(".") ?? false) })
+                ? "已识别方法名，但未找到声明。请确认 IDEA 插件已连接、目标项目已打开，或补充“类名.方法名”。"
+                : "已识别引用，但已启用项目中没有精确匹配或类名后缀候选，请核对完整类名。"); return
         }
         if precise && references.count == 1 && candidates.count == 1 && !candidates[0].requiresConfirmation && !preferences.previewBeforeOpening {
             open(candidates[0])

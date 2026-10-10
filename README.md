@@ -97,7 +97,7 @@ IDEA 收到命令与成功显示代码是两个阶段。若 IDE 自身卡顿、�
 
 ## 可选 IDEA Companion
 
-已提供 `dist/CodeJumpCompanion-0.2.0.zip`，面向本机 IDEA 2026.1（261.*）。构建：
+已提供 `dist/CodeJumpCompanion-0.2.1.zip`，面向本机 IDEA 2026.1（261.*）。构建：
 
 ```sh
 python3 idea-plugin/build.py
@@ -123,3 +123,12 @@ com.example.beta.service.enricher.impl.OrderRecordEnricher.enrich
 python3 idea-plugin/verify.py --project /path/to/open/project
 python3 idea-plugin/verify.py --project /path/to/open/project --navigate
 ```
+
+
+## 0.2.1 裸符号识别
+
+选中 `addBatch2RecordAndAddressLock` 这样的裸方法名，或在手动定位框输入它，即可通过已连接的 IDEA 插件按方法名查询已打开项目的声明。同名方法、重载和跨项目结果均显示候选，不自动跳转。没有插件连接时请使用 `RecordHelper.addBatch2RecordAndAddressLock`。
+
+代码块中的独立类名和驼峰方法名也可作为候选识别；若 AX 提供鼠标字符位置，只取命中位置的符号，否则显示附近候选并要求确认。明确选中的文字优先于邻近链接。
+
+`EnricherManager` 这类 AI 简写不一定对应真实类。没有精确类名时，对至少 8 个字符的独立类名提供最多 64 个类名后缀候选，并明确标注“未找到同名类”；文件路径、完整包名和带方法的引用不做该模糊匹配。例如 beta 的实际类是 `BatchCreateRecordEnricherManager`，不会把所有包含 EnricherManager 的类当成精确命中。

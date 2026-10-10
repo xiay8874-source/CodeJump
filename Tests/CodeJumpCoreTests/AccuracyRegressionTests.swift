@@ -88,3 +88,55 @@ struct AccuracyRegressionTests {
         #expect(throws: (any Error).self) { try SourcePreview.read(candidate) }
     }
 }
+
+struct BareReferenceRegressionTests {
+    @Test func selectedBareMethodAndInlineCode() {
+        let method = "addBatch2RecordAndAddressLock"
+        #expect(ReferenceParser.parseExplicitLabel(method)?.symbol == method)
+        #expect(ReferenceParser.parseExplicitLabel(method + "()")?.symbol == method)
+        #expect(ReferenceParser.parse("`" + method + "`").first?.symbol == method)
+        #expect(ReferenceParser.parseExplicitLabel("substring(int, int)")?.parameterSignature == "int, int")
+        #expect(ReferenceParser.parseExplicitLabel("return") == nil)
+        #expect(ReferenceParser.parseExplicitLabel("ordinary words") == nil)
+        #expect(ReferenceParser.parse("ordinary words run return").isEmpty)
+    }
+
+    @Test func screenshotParagraphRequiresConfirmationWithoutPointerAndSelectsActualHit() {
+        let text = "加分布式锁 addBatch2RecordAndAddressLock\n → EnricherManager 增强（记录/详情/状态/地址快照）\n → ValidatorManager 校验"
+        let references = ReferenceSelection.select(text: text, utf16Offset: nil)
+        #expect(references.map(\.symbol) == ["addBatch2RecordAndAddressLock", "EnricherManager", "ValidatorManager"])
+        #expect(references.allSatisfy { $0.isFallback })
+        for name in ["addBatch2RecordAndAddressLock", "EnricherManager"] {
+            let hit = ReferenceSelection.select(text: text, utf16Offset: (text as NSString).range(of: name).location + 3)
+            #expect(hit.count == 1)
+            #expect(hit.first?.symbol == name)
+            #expect(hit.first?.isFallback == false)
+        }
+    }
+
+    @Test func contextDoesNotMineRejectedLinksOrOrdinaryWords() {
+        for text in ["[EnricherManager](https://example.com)", "https://example.com?q=addBatch2RecordAndAddressLock", "ordinary words return true"] {
+            #expect(ReferenceSelection.select(text: text, utf16Offset: nil).isEmpty)
+        }
+    }
+
+    @Test func classSuffixSuggestionsAreExplicitAndNeverOverrideExactClass() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["BatchCreateRecordEnricherManager", "BatchEditRecordEnricherManager"] {
+            try "class \(name) {}".write(to: root.appendingPathComponent(name + ".java"), atomically: true, encoding: .utf8)
+        }
+        let project = ProjectRoot(name: "fixture", path: root.path)
+        var resolver = CodeResolver(index: try ProjectIndex.build(projects: [project]))
+        let reference = try #require(ReferenceParser.parseExplicitLabel("EnricherManager"))
+        let results = resolver.resolve(reference)
+        #expect(results.count == 2)
+        #expect(results.allSatisfy { $0.requiresConfirmation && $0.reason.contains("类名后缀") })
+        #expect(resolver.resolve(CodeReference(source: "", path: "EnricherManager.java")).isEmpty)
+        try "class EnricherManager {}".write(to: root.appendingPathComponent("EnricherManager.java"), atomically: true, encoding: .utf8)
+        resolver = CodeResolver(index: try ProjectIndex.build(projects: [project]))
+        #expect(resolver.resolve(reference).count == 1)
+        #expect(resolver.resolve(reference).first?.requiresConfirmation == false)
+    }
+}

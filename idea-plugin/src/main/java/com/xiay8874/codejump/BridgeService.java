@@ -146,6 +146,16 @@ public final class BridgeService implements Disposable {
     String owner = separator < 0 ? symbol : symbol.substring(0, separator);
     String method = separator < 0 ? "" : symbol.substring(separator + 1);
     if (!method.isEmpty() && Character.isUpperCase(method.charAt(0)) && !symbol.contains("#")) { owner = symbol; method = ""; }
+    if (filePath.isEmpty() && separator < 0 && symbol.matches("[a-z_$][A-Za-z0-9_$]{1,127}")) {
+      List<Map<String, Object>> results = new ArrayList<>();
+      int[] inspected = {0};
+      PsiShortNamesCache.getInstance(project).processMethodsWithName(symbol, GlobalSearchScope.projectScope(project), declaration -> {
+        if (Thread.currentThread().isInterrupted() || ++inspected[0] > 256 || results.size() >= 64) return false;
+        addMethod(results, project, declaration, signature);
+        return true;
+      });
+      return results;
+    }
     List<PsiClass> classes = new ArrayList<>();
     GlobalSearchScope scope = GlobalSearchScope.allScope(project);
     if (!filePath.isEmpty()) {
@@ -168,16 +178,21 @@ public final class BridgeService implements Disposable {
       if (method.isEmpty()) addTarget(results, project, type, type.getQualifiedName(), "");
       else for (PsiMethod declaration : type.findMethodsByName(method, true)) {
         if (results.size() >= 64) break;
-        PsiParameter[] parameters = declaration.getParameterList().getParameters();
-        String readable = Arrays.stream(parameters).map(p -> p.getType().getPresentableText()).reduce((a,b) -> a + ", " + b).orElse("");
-        String qualified = Arrays.stream(parameters).map(p -> p.getType().getCanonicalText()).reduce((a,b) -> a + ", " + b).orElse("");
-        if (!signature.isEmpty() && !normalize(signature).equals(normalize(readable)) && !normalize(signature).equals(normalize(qualified))) continue;
-        String declaring = declaration.getContainingClass() == null ? owner : declaration.getContainingClass().getQualifiedName();
-        addTarget(results, project, declaration, declaring + "#" + method, method + "(" + readable + ")");
+        addMethod(results, project, declaration, signature);
       }
       if (results.size() >= 64) break;
     }
     return results;
+  }
+
+  private void addMethod(List<Map<String, Object>> results, Project project, PsiMethod declaration, String signature) {
+    PsiParameter[] parameters = declaration.getParameterList().getParameters();
+    String readable = Arrays.stream(parameters).map(p -> p.getType().getPresentableText()).reduce((a,b) -> a + ", " + b).orElse("");
+    String qualified = Arrays.stream(parameters).map(p -> p.getType().getCanonicalText()).reduce((a,b) -> a + ", " + b).orElse("");
+    if (!signature.isEmpty() && !normalize(signature).equals(normalize(readable)) && !normalize(signature).equals(normalize(qualified))) return;
+    PsiClass owner = declaration.getContainingClass();
+    if (owner == null) return;
+    addTarget(results, project, declaration, owner.getQualifiedName() + "#" + declaration.getName(), declaration.getName() + "(" + readable + ")");
   }
 
   private void addTarget(List<Map<String, Object>> results, Project project, PsiElement original, String symbol, String signature) {

@@ -37,6 +37,19 @@ public enum ReferenceParser {
         return CodeReference(source: text, symbol: label)
     }
 
+    /// Deliberately selected text / manual input may be a bare Java method name.
+    /// Generic prose parsing stays conservative and does not treat ordinary words as symbols.
+    public static func parseExplicitLabel(_ text: String) -> CodeReference? {
+        if let type = parseClassLabel(text) { return type }
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.utf8.count <= 512, safe(value),
+              value.range(of: #"^[a-z_$][A-Za-z0-9_$]{1,127}(?:\([^()\r\n]{0,256}\))?$"#, options: .regularExpression) != nil else { return nil }
+        let name = String(value.prefix { $0 != "(" })
+        guard !["true", "false", "null", "return", "class", "public", "private", "static", "void"].contains(name) else { return nil }
+        let signature = value.firstIndex(of: "(").map { String(value[value.index(after: $0)..<value.index(before: value.endIndex)]) }
+        return CodeReference(source: text, symbol: name, parameterSignature: signature)
+    }
+
     public static func parse(_ text: String) -> [CodeReference] {
         var seen = Set<Identity>()
         return Array(parseLocated(text).map(\.reference).filter { seen.insert(Identity($0)).inserted }.prefix(maximumReferences))
@@ -139,6 +152,9 @@ public enum ReferenceParser {
         var value = input.trimmingCharacters(in: .whitespaces)
         guard safe(value), value.utf8.count <= 4096 else { return nil }
         if value.contains("://") { return urlReference(value, source: source) }
+        if allowBareClass, var method = parseExplicitLabel(value), method.symbol?.first?.isLowercase == true {
+            method.source = source; return method
+        }
         // Do not accept alternate URI schemes, drive paths, or shell fragments as relative files.
         if value.hasPrefix("javascript:"), value.hasPrefix("data:"), value.hasPrefix("vscode:") { return nil }
         var hint: String?

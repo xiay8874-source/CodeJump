@@ -73,8 +73,8 @@ enum HoverReader {
         fragments = fragments.filter { seen.insert("\($0.origin):\($0.text)").inserted }
         fragments = fragments.enumerated().sorted {
             func rank(_ fragment: CaptureFragment) -> Int {
-                if fragment.origin == "引用链接" { return 0 }
-                if fragment.origin == "选中文字" { return 1 }
+                if fragment.origin == "选中文字" { return 0 }
+                if fragment.origin == "引用链接" { return 1 }
                 if fragment.utf16Offset != nil { return 2 }
                 return fragment.precise ? 3 : 4
             }
