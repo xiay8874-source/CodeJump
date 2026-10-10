@@ -32,7 +32,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   </dict></array>
 </dict></plist>
 PLIST
-codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+if [ "$MODE" = "--build-only" ]; then
+  python3 "$ROOT_DIR/script/local_signing.py" --sign "$APP_BUNDLE" --allow-adhoc
+else
+  python3 "$ROOT_DIR/script/local_signing.py" --sign "$APP_BUNDLE"
+fi
 if [ "$MODE" = "--build-only" ]; then
   echo "Built $APP_BUNDLE"
   exit 0

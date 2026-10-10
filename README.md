@@ -79,7 +79,19 @@ RecordAbility#enrichRecord
 - `~/Library/Application Support/CodeJump/index-v1.json`：本地索引缓存。
 - 诊断界面中的最近识别文字只存在内存；系统日志只记录文件数量和耗时。
 
-本地构建使用 ad-hoc 签名，二进制重新构建后 macOS 可能要求重新授权辅助功能；正式分发需要稳定的开发者签名和公证。
+本机安装使用固定的 `CodeJump Local Development` 签名身份，私钥保存在当前用户的登录钥匙串，不进入仓库。签名要求同时固定证书指纹和 bundle ID，后续构建沿用同一身份。首次由 ad-hoc 签名切换到固定签名时需要重新授权一次。正式对外分发另需 Developer ID 签名和公证。
+
+首次设置（导入持久私钥前需用户明确同意）：
+
+```sh
+python3 script/local_signing.py --prepare
+python3 script/local_signing.py --install
+./script/build_and_run.sh --install
+```
+
+`--prepare` 只在本机私有目录生成材料；`--install` 将不可导出的私钥导入当前用户钥匙串，允许 `/usr/bin/codesign` 访问，并删除临时密钥文件。不会新增系统根证书或改变 TLS 信任。若系统弹出 codesign 私钥确认，用户本人处理。身份元数据和公开证书位于 `~/Library/Application Support/CodeJump/Signing/`，后续构建不会重新生成证书。
+
+没有固定身份时，安装流程直接失败，避免悄悄降级成临时签名、再次破坏授权。`--build-only` 可生成用于临时验证的 ad-hoc 产物，不能当作保持授权的正式更新。
 
 如果系统设置的开关已经打开，但 CodeJump 仍显示“开启辅助功能权限”，这是旧构建的授权记录尚未更新：在辅助功能列表中移除 CodeJump，再添加 `/Applications/CodeJump.app`，回到应用点击刷新。系统弹出的 Touch ID 或密码验证需由用户本人完成。仅关闭再打开旧条目的开关可能无法更新签名记录。
 
