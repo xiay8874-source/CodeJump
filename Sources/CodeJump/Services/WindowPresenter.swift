@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 @MainActor final class WindowPresenter: NSObject, NSWindowDelegate {
@@ -6,10 +7,15 @@ import SwiftUI
     private var mainWindow: NSWindow?
     private var candidatePanel: NSPanel?
     private var monitor: Any?
+    private var originPID: pid_t?
+    private var feedbackPanel: FeedbackPanel?
+    private var feedbackTask: Task<Void, Never>?
 
     init(store: AppStore) { self.store = store }
 
     func showMain() {
+        store.dismissCandidates(restoreFocus: false)
+        dismissFeedback()
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 760),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -19,21 +25,28 @@ import SwiftUI
             window.isReleasedWhenClosed = false; window.center()
             mainWindow = window
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         mainWindow?.makeKeyAndOrderFront(nil)
     }
 
-    func showCandidates() {
-        dismissCandidates()
-        showPanel(root: CandidateView(store: store), projectMode: false)
+    func showCandidates(originPID: pid_t? = nil) {
+        showPanel(root: CandidateView(store: store), projectMode: false, originPID: originPID)
     }
 
-    func showProjects() {
-        dismissCandidates()
-        showPanel(root: ProjectPickerView(store: store), projectMode: true)
+    func showProjects(originPID: pid_t? = nil) {
+        showPanel(root: ProjectPickerView(store: store), projectMode: true, originPID: originPID)
     }
 
-    private func showPanel<Content: View>(root: Content, projectMode: Bool) {
+    private func showPanel<Content: View>(root: Content, projectMode: Bool, originPID proposedPID: pid_t?) {
+        // Capture before activation or hiding an existing panel. When replacing
+        // our own panel, preserve its original external application.
+        let sourcePID = sourceApplicationPID(proposedPID)
+        dismissCandidates(restoreFocus: false)
+        dismissFeedback()
+        originPID = sourcePID
+        // Settings are shown only by showMain(). Closing a transient picker must
+        // never reveal an older settings window behind it.
+        mainWindow?.orderOut(nil)
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 606, height: 350),
             styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
@@ -48,7 +61,7 @@ import SwiftUI
         panel.setFrameOrigin(NSPoint(x: min(max(pointer.x + 12, area.minX), area.maxX - panel.frame.width),
             y: min(max(pointer.y - panel.frame.height - 12, area.minY), area.maxY - panel.frame.height)))
         candidatePanel = panel
-        NSApp.activate(ignoringOtherApps: true); panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(); panel.makeKeyAndOrderFront(nil)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.candidatePanel?.isKeyWindow == true else { return event }
             if projectMode {
@@ -57,7 +70,7 @@ import SwiftUI
                     self.store.chooseProject(at: number - 1); return nil
                 }
                 switch event.keyCode {
-                case 53: self.store.dismissCandidates(); return nil
+                case 53: self.store.dismissCandidates(restoreFocus: true); return nil
                 case 36, 76: self.store.chooseProject(at: self.store.selectedProjectIndex); return nil
                 case 125: self.store.selectedProjectIndex = min(self.store.selectedProjectIndex + 1, max(0, self.store.rankedProjects.count - 1)); return nil
                 case 126: self.store.selectedProjectIndex = max(self.store.selectedProjectIndex - 1, 0); return nil
@@ -69,22 +82,100 @@ import SwiftUI
                 self.store.choose(number - 1); return nil
             }
             switch event.keyCode {
-            case 53: self.store.dismissCandidates(); return nil
+            case 53: self.store.dismissCandidates(restoreFocus: true); return nil
             case 36, 76: self.store.choose(self.store.selectedIndex); return nil
-            case 125: self.store.selectedIndex = min(self.store.selectedIndex + 1, self.store.candidates.count - 1); return nil
+            case 125: self.store.selectedIndex = min(self.store.selectedIndex + 1, max(0, self.store.candidates.count - 1)); return nil
             case 126: self.store.selectedIndex = max(self.store.selectedIndex - 1, 0); return nil
             default: return event
             }
         }
     }
 
-    func dismissCandidates() {
+    func dismissCandidates(restoreFocus: Bool = false) {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         let panel = candidatePanel
+        let previousPID = originPID
         candidatePanel = nil
+        originPID = nil
+        panel?.delegate = nil
+        panel?.orderOut(nil)
+        guard restoreFocus, let previousPID,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+              let application = NSRunningApplication(processIdentifier: previousPID), !application.isTerminated else { return }
+        // A user's switch to a different application always wins over restoration.
+        _ = application.activate(options: [])
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        if notification.object as? NSPanel === candidatePanel {
+            store.dismissCandidates(restoreFocus: false)
+        }
+    }
+
+    /// Noninteractive feedback never activates CodeJump or steals key focus.
+    /// The complete lifetime is 2.5 seconds, including its final 0.25-second fade.
+    func showFeedback(_ message: String) {
+        dismissFeedback()
+        let panel = FeedbackPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 70),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .fullScreenAuxiliary]
+        panel.animationBehavior = .none
+        panel.contentViewController = NSHostingController(rootView: FeedbackView(message: message))
+        let size = panel.contentView?.fittingSize ?? NSSize(width: 420, height: 70)
+        panel.setContentSize(NSSize(width: 420, height: min(max(size.height, 54), 160)))
+        positionNearPointer(panel)
+        feedbackPanel = panel
+        panel.orderFrontRegardless()
+        feedbackTask = Task { [weak self, weak panel] in
+            do { try await Task.sleep(for: .seconds(2.25)) } catch { return }
+            guard let self, let panel, self.feedbackPanel === panel else { return }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.25
+                panel.animator().alphaValue = 0
+            }, completionHandler: nil)
+            do { try await Task.sleep(for: .seconds(0.25)) } catch { return }
+            guard self.feedbackPanel === panel else { return }
+            panel.orderOut(nil)
+            self.feedbackPanel = nil
+            self.feedbackTask = nil
+        }
+    }
+
+    private func dismissFeedback() {
+        feedbackTask?.cancel()
+        feedbackTask = nil
+        let panel = feedbackPanel
+        feedbackPanel = nil
         panel?.orderOut(nil)
     }
-    func windowDidResignKey(_ notification: Notification) {
-        if notification.object as? NSPanel === candidatePanel { store.dismissCandidates() }
+
+    private func sourceApplicationPID(_ proposedPID: pid_t?) -> pid_t? {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for pid in [proposedPID, frontmostPID, originPID].compactMap({ $0 }) where pid != ownPID {
+            if let application = NSRunningApplication(processIdentifier: pid), !application.isTerminated { return pid }
+        }
+        return nil
     }
+
+    private func positionNearPointer(_ window: NSWindow) {
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
+        let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        window.setFrameOrigin(NSPoint(
+            x: max(area.minX, min(pointer.x + 12, area.maxX - window.frame.width)),
+            y: max(area.minY, min(pointer.y - window.frame.height - 12, area.maxY - window.frame.height))))
+    }
+}
+
+@MainActor private final class FeedbackPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }

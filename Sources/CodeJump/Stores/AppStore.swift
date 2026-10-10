@@ -57,6 +57,7 @@ struct Preferences: Codable {
     private var lastLaunchTime = Date.distantPast
     private var currentLaunchID: UUID?
     private var pendingLink: URL?
+    private var interactionOriginPID: pid_t?
     private let service: IndexService
     private let settingsURL: URL
     private lazy var windows = WindowPresenter(store: self)
@@ -91,7 +92,7 @@ struct Preferences: Codable {
             if let count = await service.restore(projects: preferences.projects) { fileCount = count }
             refreshIndex()
         }
-        showMainWindow()
+        if preferences.projects.isEmpty { showMainWindow() }
     }
 
     func persist() {
@@ -115,13 +116,25 @@ struct Preferences: Codable {
 
     func showMainWindow() { checkPermission(); windows.showMain() }
 
+    private func recordInteractionOrigin() {
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        interactionOriginPID = pid == ProcessInfo.processInfo.processIdentifier ? nil : pid
+    }
+
+    private func feedback(_ message: String) {
+        error = message
+        status = message
+        windows.showFeedback(message)
+    }
+
     func showProjectPicker() {
         searchGeneration += 1; busy = false
+        recordInteractionOrigin()
         guard !preferences.projects.filter(\.enabled).isEmpty else {
-            error = "请先添加需要切换的项目。"; showMainWindow(); return
+            feedback("尚未导入项目，请从菜单栏打开“项目与设置”。"); return
         }
         projectQuery = ""; selectedProjectIndex = 0
-        windows.showProjects()
+        windows.showProjects(originPID: interactionOriginPID)
     }
 
     func chooseProject(at index: Int) {
@@ -150,7 +163,7 @@ struct Preferences: Codable {
                 status = focused ? "已切换到 \(project.name)" : "已请求打开 \(project.name)"
             } catch {
                 guard generation == searchGeneration else { return }
-                self.error = "项目打开失败：\(error.localizedDescription)"; showMainWindow()
+                feedback("项目打开失败：\(error.localizedDescription)")
             }
         }
     }
@@ -215,11 +228,12 @@ struct Preferences: Codable {
     }
 
     func capturePointer() {
-        checkPermission()
-        guard accessibilityGranted else { error = "需要辅助功能权限，才能读取鼠标指向的引用。"; showMainWindow(); return }
         guard !busy else { return }
-        guard !preferences.projects.filter(\.enabled).isEmpty else { error = "请先导入至少一个项目。"; showMainWindow(); return }
-        guard !indexing && indexReady else { error = "项目索引尚未就绪，完成更新后再按快捷键。"; showMainWindow(); return }
+        checkPermission()
+        recordInteractionOrigin()
+        guard accessibilityGranted else { feedback("请在菜单栏“项目与设置”中开启辅助功能权限。"); return }
+        guard !preferences.projects.filter(\.enabled).isEmpty else { feedback("尚未导入项目，请从菜单栏打开“项目与设置”。"); return }
+        guard !indexing && indexReady else { feedback("项目索引正在准备，完成后再试。"); return }
         let point = CGEvent(source: nil)?.location ?? .zero
         let name = NSWorkspace.shared.frontmostApplication?.localizedName ?? "应用"
         busy = true; error = nil
@@ -248,16 +262,16 @@ struct Preferences: Codable {
                 return
             }
             busy = false; captureText = capture.fragments.first?.text ?? ""; captureOrigin = name
-            error = "没有读到代码引用。请选中完整引用再试，或在定位框粘贴路径。"
-            showMainWindow()
+            feedback("未识别到代码位置，选中完整引用后按 \(shortcutLabel) 重试。")
         }
     }
 
     func searchManually() {
-        guard !indexing && indexReady else { error = "请等待索引完成，或重新索引。"; return }
+        recordInteractionOrigin()
+        guard !indexing && indexReady else { feedback("请等待索引完成，或重新索引。"); return }
         var references = ReferenceParser.parse(query)
         if references.isEmpty, let label = ReferenceParser.parseClassLabel(query) { references = [label] }
-        guard !references.isEmpty else { error = "未识别到文件路径、类名或方法引用。"; return }
+        guard !references.isEmpty else { feedback("未识别到文件路径、类名或方法引用。"); return }
         busy = true; error = nil
         searchGeneration += 1
         let generation = searchGeneration
@@ -267,11 +281,12 @@ struct Preferences: Codable {
 
     func handle(url: URL) {
         guard url.scheme == "codejump", url.host == "open" else { return }
+        recordInteractionOrigin()
         query = url.absoluteString
-        guard indexReady && !indexing else { pendingLink = url; showMainWindow(); return }
+        guard indexReady && !indexing else { pendingLink = url; feedback("索引准备好后会显示定位结果。"); return }
         // External links always expose the resolved destination before opening.
         let references = ReferenceParser.parse(query)
-        guard !references.isEmpty else { error = "跳转链接无效。"; showMainWindow(); return }
+        guard !references.isEmpty else { feedback("跳转链接无效。"); return }
         searchGeneration += 1
         let generation = searchGeneration
         let text = query
@@ -291,13 +306,12 @@ struct Preferences: Codable {
         candidates = result.0; selectedIndex = 0; busy = false
         log.info("resolve refs=\(references.count) candidates=\(result.0.count) elapsed_ms=\(result.1)")
         guard !candidates.isEmpty else {
-            error = "在已启用项目中没有找到匹配。可补充项目、完整路径或类名。"
-            showMainWindow(); return
+            feedback("已启用项目中没有匹配，请补充项目名或完整路径。"); return
         }
         if precise && references.count == 1 && candidates.count == 1 && !candidates[0].requiresConfirmation && !preferences.previewBeforeOpening {
             open(candidates[0])
         } else {
-            windows.showCandidates()
+            windows.showCandidates(originPID: interactionOriginPID)
         }
     }
 
@@ -306,9 +320,9 @@ struct Preferences: Codable {
         open(candidates[index])
     }
 
-    func dismissCandidates() {
+    func dismissCandidates(restoreFocus: Bool = true) {
         searchGeneration += 1; busy = false
-        windows.dismissCandidates()
+        windows.dismissCandidates(restoreFocus: restoreFocus)
     }
 
     private func open(_ candidate: JumpCandidate) {
@@ -322,7 +336,7 @@ struct Preferences: Codable {
             windows.dismissCandidates()
             lastOpened = "\(candidate.project.name) / \(candidate.relativePath)\(candidate.line.map { ":\($0)" } ?? "")"
         } catch {
-            self.error = "打开失败：\(error.localizedDescription)"; showMainWindow()
+            feedback("打开失败：\(error.localizedDescription)")
         }
     }
 
@@ -338,8 +352,7 @@ struct Preferences: Codable {
                 Task { @MainActor in
                     guard let self, self.currentLaunchID == requestID else { return }
                     if exitStatus != 0 && Date().timeIntervalSince(requestedAt) < 30 {
-                        self.error = "编辑器启动请求失败（退出码 \(exitStatus)），请检查编辑器状态或安装位置。"
-                        self.status = "编辑器未完成启动请求"
+                        self.feedback("编辑器启动失败（退出码 \(exitStatus)），请检查安装位置。")
                     }
                 }
             }
