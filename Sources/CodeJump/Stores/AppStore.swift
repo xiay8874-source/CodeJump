@@ -261,16 +261,28 @@ struct Preferences: Codable {
         guard !preferences.projects.filter(\.enabled).isEmpty else { feedback("尚未导入项目，请从菜单栏打开“项目与设置”。"); return }
         guard !indexing && indexReady else { feedback("项目索引正在准备，完成后再试。"); return }
         let point = CGEvent(source: nil)?.location ?? .zero
+        let sourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let name = NSWorkspace.shared.frontmostApplication?.localizedName ?? "应用"
-        busy = true; error = nil
+        busy = true; error = nil; status = "正在识别代码位置…"
         searchGeneration += 1
         let generation = searchGeneration
         Task {
-            let capture = await Task.detached(priority: .userInitiated) {
-                HoverReader.capture(x: point.x, y: point.y, application: name)
-            }.value
+            let captureStarted = Date()
+            let attempt = await BoundedCapture.read(targetIsCurrent: { @MainActor [weak self] in
+                guard let self, generation == self.searchGeneration,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == sourcePID,
+                      let current = CGEvent(source: nil)?.location else { return false }
+                return abs(current.x - point.x) <= 8 && abs(current.y - point.y) <= 8
+            }, capture: {
+                await Task.detached(priority: .userInitiated) {
+                    HoverReader.capture(x: point.x, y: point.y, application: name)
+                }.value
+            }, isUseful: { $0.hasRecognizableReference })
             guard generation == searchGeneration else { return }
-            captureMilliseconds = capture.elapsedMilliseconds
+            guard let attempt else { busy = false; status = "读取已取消：来源应用或鼠标位置发生变化"; return }
+            let capture = attempt.value
+            captureMilliseconds = Date().timeIntervalSince(captureStarted) * 1000
+            log.info("capture attempts=\(attempt.attempts) fragments=\(capture.fragments.count) recognized=\(capture.hasRecognizableReference) elapsed_ms=\(self.captureMilliseconds)")
             var primary: [CodeReference] = []
             var fallback: [CodeReference] = []
             var primaryText = ""
@@ -292,7 +304,7 @@ struct Preferences: Codable {
             if !primary.isEmpty {
                 let result = await resolveScoped(primary)
                 guard generation == searchGeneration else { return }
-                captureText = primaryText; captureOrigin = "\(capture.application) · \(primaryOrigin)"
+                captureText = primaryText; captureOrigin = "\(capture.application) · \(primaryOrigin)" + (attempt.attempts > 1 ? " · 自动重读 \(attempt.attempts) 次" : "")
                 if !result.0.isEmpty {
                     finishResolution(primary, result: result, precise: true)
                     return
@@ -325,7 +337,7 @@ struct Preferences: Codable {
             captureText = query; captureOrigin = "手动输入 · 未识别"; lastReferences = []; candidates = []
             feedback("未识别到文件路径、类名或方法引用。"); return
         }
-        busy = true; error = nil
+        busy = true; error = nil; status = "正在识别代码位置…"
         searchGeneration += 1
         let generation = searchGeneration
         let text = query
@@ -382,6 +394,7 @@ struct Preferences: Codable {
                 ? "已识别方法名，但未找到声明。请确认 IDEA 插件已连接、目标项目已打开，或补充“类名.方法名”。"
                 : "已识别引用，但已启用项目中没有精确匹配或类名后缀候选，请核对完整类名。"); return
         }
+        status = "已找到 \(candidates.count) 个代码位置"
         if precise && references.count == 1 && candidates.count == 1 && !candidates[0].requiresConfirmation && !preferences.previewBeforeOpening {
             open(candidates[0])
         } else {

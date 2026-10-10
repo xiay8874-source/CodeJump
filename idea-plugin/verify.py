@@ -41,6 +41,6 @@ if args.bare_method:
 if args.navigate:
     assert call('navigate',{'target':exact[0]['target']})[0]==200
     status,selected=call('selection')
-    assert status==200 and any(r['project']==args.project and r['line']==exact[0]['line'] and r['path']==exact[0]['path'] for r in selected)
+    assert status==200 and any(r['project']==args.project and r['line']==exact[0]['line'] and r['path']==(pathlib.Path(exact[0]['path']).as_uri() if exact[0]['path'].startswith('/') else exact[0]['path']) for r in selected)
     result['navigation']={'verified':True,'line':exact[0]['line']}
 print(json.dumps(result,ensure_ascii=False,indent=2))

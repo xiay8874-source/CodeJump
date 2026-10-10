@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import Foundation
+import CodeJumpCore
 
 struct CaptureFragment: Sendable {
     let text: String
@@ -13,6 +14,12 @@ struct HoverCapture: Sendable {
     let fragments: [CaptureFragment]
     let application: String
     let elapsedMilliseconds: Double
+    var hasRecognizableReference: Bool {
+        fragments.contains {
+            !ReferenceSelection.select(text: $0.text, utf16Offset: $0.utf16Offset).isEmpty
+            || ($0.precise && ReferenceParser.parseExplicitLabel($0.text) != nil)
+        }
+    }
 }
 
 enum HoverReader {
@@ -30,7 +37,7 @@ enum HoverReader {
         AXUIElementSetMessagingTimeout(system, 0.15)
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(x), Float(y), &hit) == .success, let hit else {
-            return HoverCapture(fragments: [], application: application, elapsedMilliseconds: 0)
+            return HoverCapture(fragments: [], application: application, elapsedMilliseconds: Date().timeIntervalSince(started) * 1000)
         }
         AXUIElementSetMessagingTimeout(hit, 0.15)
         var fragments: [CaptureFragment] = []
