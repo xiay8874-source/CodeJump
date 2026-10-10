@@ -73,4 +73,6 @@ RecordAbility#enrichRecord
 
 本地构建使用 ad-hoc 签名，二进制重新构建后 macOS 可能要求重新授权辅助功能；正式分发需要稳定的开发者签名和公证。
 
+如果系统设置的开关已经打开，但 CodeJump 仍显示“开启辅助功能权限”，这是旧构建的授权记录尚未更新：在辅助功能列表中移除 CodeJump，再添加 `/Applications/CodeJump.app`，回到应用点击刷新。系统弹出的 Touch ID 或密码验证需由用户本人完成。仅关闭再打开旧条目的开关可能无法更新签名记录。
+
 IDEA 收到命令与成功显示代码是两个阶段。若 IDE 自身卡顿、出现文件缓存错误或内存不足，需要先恢复 IDE 状态；CodeJump 不会自动重启 IDE。
