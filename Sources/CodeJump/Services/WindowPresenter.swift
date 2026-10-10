@@ -18,6 +18,17 @@ import SwiftUI
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
+    func toggleMain() {
+        // A home page behind another app should come forward. Only a second
+        // press while using the home page hides it and returns to the other app.
+        if let mainWindow, mainWindow.isKeyWindow, NSApp.isActive, !mainWindow.isMiniaturized {
+            mainWindow.orderOut(nil)
+            NSApp.hide(nil)
+        } else {
+            showMain()
+        }
+    }
+
     func showMain() {
         store.dismissCandidates(restoreFocus: false)
         dismissFeedback()
@@ -35,6 +46,8 @@ import SwiftUI
             mainWindow = window
         }
         if let mainWindow { fitMainWindow(mainWindow, initially: isNewWindow) }
+        if mainWindow?.isMiniaturized == true { mainWindow?.deminiaturize(nil) }
+        NSApp.unhideWithoutActivation()
         NSApp.activate()
         mainWindow?.makeKeyAndOrderFront(nil)
     }

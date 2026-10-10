@@ -86,7 +86,7 @@ struct Preferences: Codable {
     func start() {
         hotKey = HotKeyService(navigate: { [weak self] in self?.capturePointer() },
                               chooseProject: { [weak self] in self?.showProjectPicker() },
-                              showHome: { [weak self] in self?.showMainWindow() })
+                              showHome: { [weak self] in self?.toggleMainWindow() })
         registerShortcut()
         configureWatcher()
         indexing = true
@@ -117,6 +117,7 @@ struct Preferences: Codable {
     }
 
     func showMainWindow() { checkPermission(); windows.showMain() }
+    func toggleMainWindow() { checkPermission(); windows.toggleMain() }
 
     private func recordInteractionOrigin() {
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier

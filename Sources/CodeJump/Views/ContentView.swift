@@ -33,8 +33,8 @@ struct ContentView: View {
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 4) {
                 Button("收起窗口") { NSApp.keyWindow?.close() }
-                    .help("应用继续在菜单栏运行；按 \(store.homeShortcutLabel) 再次打开")
-                Text("主页 \(store.homeShortcutLabel)")
+                    .help("应用继续在菜单栏运行；按 \(store.homeShortcutLabel) 显示或收起主页")
+                Text("显示 / 收起 \(store.homeShortcutLabel)")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
