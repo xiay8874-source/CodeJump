@@ -67,6 +67,8 @@ RecordAbility#enrichRecord
 
 构建脚本默认 Release；`CODEJUMP_CONFIGURATION=debug` 可切换 Debug。支持 `--verify`、`--debug`、`--logs`、`--telemetry`。安装时只替换相同 bundle ID 的 CodeJump，原版本备份在 `output/backups/`。
 
+应用图标源文件是 `Assets/AppIcon.png`（至少 1024 × 1024 的正方形 PNG）。每次构建通过 `script/generate_icon.sh` 使用 macOS 的 `sips` 和 `iconutil` 生成 16、32、128、256、512 点及对应 Retina 尺寸，再打包为 `AppIcon.icns`。图标在应用签名前写入资源目录，沿用现有固定签名身份。
+
 只读性能检查，不启动编辑器：
 
 ```sh

@@ -11,6 +11,7 @@ swift build -c "$CONFIGURATION"
 BUILD_PATH="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BUILD_PATH/CodeJump" "$APP_BUNDLE/Contents/MacOS/CodeJump"
+"$ROOT_DIR/script/generate_icon.sh" "$ROOT_DIR/Assets/AppIcon.png" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,8 +20,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>com.xiay8874.CodeJump</string>
   <key>CFBundleName</key><string>CodeJump</string>
   <key>CFBundleDisplayName</key><string>CodeJump</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
-  <key>CFBundleVersion</key><string>7</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleShortVersionString</key><string>0.3.1</string>
+  <key>CFBundleVersion</key><string>8</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
