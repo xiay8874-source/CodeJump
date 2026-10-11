@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CodeJumpCore
 
@@ -68,6 +69,63 @@ struct ReferenceParserTests {
         let refs = ReferenceParser.parse(input)
         #expect(refs.count == 3)
         #expect(refs.map(\.projectHint) == ["demo-alpha", "demo-beta", nil])
+    }
+
+    @Test func markdownLabelsPreserveProjectForIdenticalRelativeTargets() {
+        let refs = ReferenceParser.parse("""
+        [demo-alpha / Foo#send](src/Foo.java:12)
+        [demo-beta / Foo#send](src/Foo.java:12)
+        [Foo#send](src/Foo.java:12)
+        [demo-beta / Foo](src/Foo.java:12)
+        """)
+        #expect(refs.count == 4)
+        #expect(refs.map(\.projectHint) == ["demo-alpha", "demo-beta", nil, "demo-beta"])
+        #expect(refs.map(\.symbol) == ["Foo#send", "Foo#send", "Foo#send", nil])
+        #expect(refs.allSatisfy { $0.path == "src/Foo.java" && $0.line == 12 })
+    }
+
+    @Test func markdownLabelCannotOverrideContradictoryTargetsOrRejectedLinks() {
+        let explicit = ReferenceParser.parse("[demo-beta / Foo#send](codejump://open?path=src%2FFoo.java&line=12&project=demo-alpha)").first
+        #expect(explicit?.projectHint == "demo-alpha")
+        #expect(explicit?.symbol == nil)
+        #expect(explicit?.contextAmbiguous == true)
+        let absolute = ReferenceParser.parse("[demo-beta / Foo#send](/repos/demo-alpha/src/Foo.java:12)").first
+        #expect(absolute?.projectHint == nil)
+        #expect(absolute?.symbol == nil)
+        #expect(absolute?.contextAmbiguous == true)
+        let differentClass = ReferenceParser.parse("[demo-beta / Bar#send](src/Foo.java:12)").first
+        #expect(differentClass?.projectHint == nil)
+        #expect(differentClass?.symbol == nil)
+        #expect(differentClass?.contextAmbiguous == true)
+        #expect(ReferenceParser.parse("[demo-beta / Foo#send](https://example.com/src/Foo.java:12)").isEmpty)
+        #expect(ReferenceParser.parse("[source](src/Foo.java:12)").first?.contextAmbiguous == false)
+    }
+
+    @Test func markdownProjectLabelsResolveIdenticalRelativeFilesInTheirOwnProjects() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("codejump-link-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projects = try ["demo-alpha", "demo-beta"].map { name in
+            let project = root.appendingPathComponent(name)
+            let file = project.appendingPathComponent("src/Foo.java")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "class Foo {\n  void send() {}\n}\n".write(to: file, atomically: true, encoding: .utf8)
+            return ProjectRoot(name: name, path: project.path)
+        }
+        let resolver = CodeResolver(index: try ProjectIndex.build(projects: projects))
+        let refs = ReferenceParser.parse("[demo-alpha / Foo#send](src/Foo.java:2) → [demo-beta / Foo#send](src/Foo.java:2)")
+        #expect(refs.count == 2)
+        for reference in refs {
+            let candidates = resolver.resolve(reference)
+            #expect(candidates.count == 1)
+            #expect(candidates.first?.project.name == reference.projectHint)
+            #expect(candidates.first?.line == 2)
+        }
+    }
+
+    @Test func markdownMethodSignaturesRemainAvailableForOverloads() {
+        let ref = ReferenceParser.parse("[Foo#send(String, int)](src/Foo.java:12)").first
+        #expect(ref?.symbol == "Foo#send")
+        #expect(ref?.parameterSignature == "String, int")
     }
 
     @Test func testRevisionAndMethod() throws {

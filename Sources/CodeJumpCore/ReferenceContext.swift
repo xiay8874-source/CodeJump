@@ -1,9 +1,9 @@
 import Foundation
 
-/// Conservatively supplements a file URL with labels from the same accessibility neighborhood.
+/// Conservatively supplements a file reference with labels from the same accessibility neighborhood.
 /// This performs no I/O. Conflicting positions remain unchanged and explicitly require confirmation.
 public enum ReferenceContext {
-    public static func enrich(_ reference: CodeReference, labels: [String]) -> CodeReference {
+    public static func enrich(_ reference: CodeReference, labels: [String], labelsAreLinkTitles: Bool = false) -> CodeReference {
         guard let targetPath = reference.path, !targetPath.isEmpty, labels.count <= 32,
               labels.reduce(0, { $0 + $1.utf8.prefix(65_537).count }) <= 65_536 else { return reference }
         let targetName = basename(targetPath)
@@ -11,24 +11,37 @@ public enum ReferenceContext {
         guard !targetName.isEmpty, !targetClass.isEmpty else { return reference }
         var candidates: [Supplement: CodeReference] = [:]
         var symbols: [String: String] = [:]
+        var projects = Set<String>()
+        var signatures = Set<String>()
         var ambiguous = reference.contextAmbiguous
 
         for label in labels {
             // An AX label should be small; larger text nodes belong in the normal paragraph parser.
             guard label.utf8.prefix(4097).count <= 4096 else { continue }
-            for candidate in ReferenceParser.parse(label) {
+            var parsed = ReferenceParser.parse(label)
+            if parsed.isEmpty, let exact = ReferenceParser.parseLinkLabel(label) { parsed = [exact] }
+            for candidate in parsed {
                 guard matches(candidate, targetPath: targetPath, targetName: targetName, targetClass: targetClass),
                       matchesProject(candidate.projectHint, reference: reference, path: targetPath),
-                      candidate.revision == nil || candidate.revision == reference.revision else { continue }
+                      candidate.revision == nil || candidate.revision == reference.revision else {
+                    // A nearby paragraph can mention another file. A link's own visible title,
+                    // however, must not disagree with its target and then silently auto-open.
+                    if labelsAreLinkTitles { ambiguous = true }
+                    continue
+                }
+                if candidate.contextAmbiguous { ambiguous = true; continue }
                 let candidateSymbol = method(candidate.symbol, className: targetClass)
                 let existingSymbol = method(reference.symbol, className: targetClass)
                 if let candidateSymbol, let originalSymbol = candidate.symbol {
                     symbols[candidateSymbol] = originalSymbol
+                    if let signature = candidate.parameterSignature { signatures.insert(signature) }
                 }
+                if let project = candidate.projectHint { projects.insert(project) }
                 let positionMatches = compatible(reference.line, candidate.line)
                     && compatible(reference.endLine, candidate.endLine)
                     && compatible(reference.column, candidate.column)
                 let symbolMatches = compatible(existingSymbol, candidateSymbol)
+                    && compatible(reference.parameterSignature, candidate.parameterSignature)
                 if !positionMatches || !symbolMatches { ambiguous = true }
                 // A title may describe a method accurately while its line is stale. Preserve
                 // the target position and retain that unique method for the resolver to check.
@@ -44,9 +57,10 @@ public enum ReferenceContext {
 
             }
         }
-        if candidates.count > 1 || symbols.count > 1 { ambiguous = true }
+        if candidates.count > 1 || symbols.count > 1 || projects.count > 1 || signatures.count > 1 { ambiguous = true }
         var result = reference
-        if candidates.count == 1, symbols.count <= 1, let (addition, _) = candidates.first {
+        if candidates.count == 1, symbols.count <= 1, projects.count <= 1, signatures.count <= 1,
+           let (addition, _) = candidates.first {
             result.line = result.line ?? addition.line
             result.endLine = result.endLine ?? addition.endLine
             result.column = result.column ?? addition.column
@@ -54,6 +68,11 @@ public enum ReferenceContext {
         // Different spelling separators (Foo.method and Foo#method) identify one method.
         // Distinct method names remain ambiguous and must never be chosen arbitrarily.
         if result.symbol == nil, symbols.count == 1 { result.symbol = symbols.first?.value }
+        if result.parameterSignature == nil, symbols.count == 1, signatures.count == 1,
+           method(result.symbol, className: targetClass) == symbols.first?.key {
+            result.parameterSignature = signatures.first
+        }
+        if result.projectHint == nil, projects.count == 1 { result.projectHint = projects.first }
         result.contextAmbiguous = ambiguous
         return result
     }
@@ -87,7 +106,12 @@ public enum ReferenceContext {
     private static func matchesProject(_ hint: String?, reference: CodeReference, path: String) -> Bool {
         guard let hint else { return true }
         if let project = reference.projectHint { return hint == project }
-        return path.split(separator: "/").contains(Substring(hint))
+        // Relative targets are intentionally project-independent. Their own link label is
+        // allowed to identify the project; an absolute target must already corroborate it.
+        if path.hasPrefix("/") || path.hasPrefix("~/") {
+            return path.split(separator: "/").contains(Substring(hint))
+        }
+        return true
     }
     private static func method(_ symbol: String?, className: String) -> String? {
         guard let symbol, !symbol.isEmpty, symbol != className else { return nil }

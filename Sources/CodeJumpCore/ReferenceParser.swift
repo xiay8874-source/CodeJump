@@ -50,6 +50,14 @@ public enum ReferenceParser {
         return CodeReference(source: text, symbol: name, parameterSignature: signature)
     }
 
+    /// Exact link labels can contain a short class name and an explicit project prefix.
+    /// This is not a fallback for rejected URLs or general prose.
+    static func parseLinkLabel(_ text: String) -> CodeReference? {
+        guard let reference = atom(text, source: text, allowBareClass: true),
+              reference.path != nil || reference.symbol.flatMap(symbolName) != nil else { return nil }
+        return reference
+    }
+
     public static func parse(_ text: String) -> [CodeReference] {
         var seen = Set<Identity>()
         return Array(parseLocated(text).map(\.reference).filter { seen.insert(Identity($0)).inserted }.prefix(maximumReferences))
@@ -101,10 +109,7 @@ public enum ReferenceParser {
             else if let title = target.range(of: #"\s+[\"'].*[\"']$"#, options: .regularExpression) { target.removeSubrange(title) }
             var ref = atom(target, source: original.substring(with: match.range), allowBareClass: false)
             let label = group(match, 1, text)
-            if let labelRef = atom(label, source: label, allowBareClass: false), labelRef.path == nil,
-               let symbol = labelRef.symbol, label.contains("#") || label.contains(".") {
-                if ref?.symbol == nil { ref?.symbol = symbol; ref?.parameterSignature = labelRef.parameterSignature }
-            }
+            if let target = ref { ref = ReferenceContext.enrich(target, labels: [label], labelsAreLinkTitles: true) }
             record(ref, at: match.range, adjacent: true)
             mask(match.range)
         }

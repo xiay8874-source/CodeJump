@@ -132,6 +132,8 @@ struct Preferences: Codable {
         }
     }
 
+    func showClaudeInstructions() { windows.showClaudeInstructions() }
+
     func showMainWindow() { checkPermission(); windows.showMain() }
     func toggleMainWindow() { checkPermission(); windows.toggleMain() }
 
@@ -292,7 +294,7 @@ struct Preferences: Codable {
                 if fragment.precise, fragment.utf16Offset == nil,
                    let label = ReferenceParser.parseExplicitLabel(fragment.text) { references = [label] }
                 if fragment.origin == "引用链接" {
-                    references = references.map { ReferenceContext.enrich($0, labels: fragment.labels) }
+                    references = references.map { ReferenceContext.enrich($0, labels: fragment.labels, labelsAreLinkTitles: true) }
                 }
                 guard !references.isEmpty else { continue }
                 if primary.isEmpty, fragment.precise, !references.contains(where: \.isFallback) {

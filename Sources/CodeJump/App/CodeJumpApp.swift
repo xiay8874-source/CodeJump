@@ -9,6 +9,7 @@ import SwiftUI
         MenuBarExtra("CodeJump", systemImage: "arrow.up.forward.app") {
             Button("切换项目…  \(store.projectShortcutLabel)") { store.showProjectPicker() }
             Button("主页与设置…  \(store.homeShortcutLabel)") { store.showMainWindow() }
+            Button("Claude 代码引用规则…") { store.showClaudeInstructions() }
             Button("定位剪贴板中的引用") {
                 store.query = NSPasteboard.general.string(forType: .string) ?? ""
                 store.searchManually()

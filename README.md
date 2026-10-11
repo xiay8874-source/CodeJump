@@ -163,3 +163,15 @@ python3 script/package_dmg.py
 DMG 包含 `CodeJump.app`、Applications 快捷入口、IDEA Companion ZIP 和安装说明；SHA-256 校验文件与 DMG 同目录。不包含本机设置、历史记录或签名私钥。脚本会校验应用签名和磁盘镜像，并拒绝覆盖同名发布包。
 
 源码通过 Git 推送，DMG 和插件 ZIP 作为 GitHub Release 附件上传。当前包为 Apple Silicon（arm64），要求 macOS 14+，使用本机固定证书签名，尚未做 Apple 公证。
+
+## Claude Code 全局规则编辑器（0.3.0）
+
+主页的“Claude 代码引用”→“安装 / 编辑规则…”可查看、修改、安装或移除 CodeJump 的引用规范；菜单栏也有直接入口。推荐规则保持简短，同项目标签不重复项目名，跨项目才补充必要项目说明，链接目标使用完整相对路径。
+
+- 点击保存才写入 `~/.claude/CLAUDE.md`，新开的 Claude Code 会话加载。
+- CodeJump 只更新 `<!-- CodeJump:begin -->` 与 `<!-- CodeJump:end -->` 之间的规则，保留其他全局指令；保存/移除前在 `~/.claude/codejump-backups/` 备份原文件。
+- 编辑过程中如果文件被外部修改，拒绝覆盖并提示重新读取。关闭编辑窗口不会丢失未保存草稿。
+- “恢复推荐规则”只填入草稿，点击保存才生效；“移除这段规则”不删除其他全局指令。
+- 之前由 CodeJump 单独安装的完整旧规则可精确识别并迁移；不凭相似标题覆盖未知内容。符号链接、异常管理标记或非 UTF-8 文件需先在外部确认。
+
+该功能配置的是 Claude Code 全局指令，不修改普通 Claude 聊天的账号偏好，也不修改模型或代理路由。Markdown 和辅助功能链接识别会保留标签里的项目名；标签与目标的类名或项目冲突时要求确认。

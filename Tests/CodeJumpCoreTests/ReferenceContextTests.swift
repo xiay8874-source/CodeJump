@@ -134,4 +134,43 @@ struct ReferenceContextTests {
         #expect(ReferenceContext.enrich(target, labels: ["project-a@def456:src/Foo.java:12"]) == target)
         #expect(ReferenceContext.enrich(target, labels: ["project-a@abc123:src/Foo.java:12"]).line == 12)
     }
+
+    @Test func renderedRelativeURLCanUseItsVisibleProjectLabel() {
+        let relative = CodeReference(source: "src/Foo.java:12", path: "src/Foo.java", line: 12)
+        let result = ReferenceContext.enrich(relative, labels: ["demo-beta / Foo#send"])
+        #expect(result.path == relative.path)
+        #expect(result.line == 12)
+        #expect(result.symbol == "Foo#send")
+        #expect(result.projectHint == "demo-beta")
+        #expect(!result.contextAmbiguous)
+        let classOnly = ReferenceContext.enrich(relative, labels: ["demo-beta / Foo"])
+        #expect(classOnly.projectHint == "demo-beta")
+        #expect(classOnly.symbol == nil)
+    }
+
+    @Test func conflictingRenderedProjectLabelsRequireConfirmation() {
+        let relative = CodeReference(source: "src/Foo.java", path: "src/Foo.java")
+        let result = ReferenceContext.enrich(relative, labels: ["demo-alpha / Foo#send", "demo-beta / Foo#send"])
+        #expect(result.projectHint == nil)
+        #expect(result.contextAmbiguous)
+    }
+
+    @Test func renderedLabelsCannotMineRejectedLinksOrOverrideExplicitProject() {
+        #expect(ReferenceContext.enrich(target, labels: ["[project-a / Foo#send](https://example.com/Foo.java)"]) == target)
+        #expect(ReferenceContext.enrich(target, labels: ["project-b / Foo#send"]) == target)
+        let conflictingFile = ReferenceContext.enrich(target, labels: ["[project-a / Bar#send](other/Bar.java:12)"])
+        #expect(conflictingFile == target)
+    }
+
+    @Test func ownLinkTitleContradictionsRequireConfirmationWithoutReplacingTarget() {
+        var expected = target
+        expected.contextAmbiguous = true
+        for label in ["project-b / Foo#send", "Bar#send", "other/Foo.java:12", "project-a@def456:src/Foo.java:12"] {
+            #expect(ReferenceContext.enrich(target, labels: [label], labelsAreLinkTitles: true) == expected,
+                    Comment(rawValue: label))
+        }
+        #expect(ReferenceContext.enrich(target, labels: ["[Foo#send](https://example.com/Foo.java)"], labelsAreLinkTitles: true) == target)
+        #expect(ReferenceContext.enrich(target, labels: ["source"], labelsAreLinkTitles: true) == target)
+        #expect(ReferenceContext.enrich(target, labels: ["[Bar#send](src/Foo.java:12)"], labelsAreLinkTitles: true) == expected)
+    }
 }

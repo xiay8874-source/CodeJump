@@ -54,6 +54,7 @@ struct ContentView: View {
                 }.padding(12).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
             permissionRow
+            ClaudeInstructionsSection(openEditor: store.showClaudeInstructions)
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {

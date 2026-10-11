@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor final class WindowPresenter: NSObject, NSWindowDelegate {
     private let store: AppStore
     private var mainWindow: NSWindow?
+    private var instructionWindow: NSWindow?
     private var candidatePanel: NSPanel?
     private var monitor: Any?
     private var originPID: pid_t?
@@ -52,7 +53,29 @@ import SwiftUI
         mainWindow?.makeKeyAndOrderFront(nil)
     }
 
+    func showClaudeInstructions() {
+        store.dismissCandidates(restoreFocus: false)
+        dismissFeedback()
+        ClaudeInstructionStore.shared.refreshIfClean()
+        let isNew = instructionWindow == nil
+        if instructionWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 680),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.title = "CodeJump — Claude 全局规则"
+            let host = NSHostingController(rootView: ClaudeInstructionsView())
+            host.sizingOptions = []
+            window.contentViewController = host
+            window.isReleasedWhenClosed = false
+            instructionWindow = window
+        }
+        if let instructionWindow { fitMainWindow(instructionWindow, initially: isNew) }
+        if instructionWindow?.isMiniaturized == true { instructionWindow?.deminiaturize(nil) }
+        NSApp.unhideWithoutActivation(); NSApp.activate()
+        instructionWindow?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func screenParametersChanged(_ notification: Notification) {
+        if let instructionWindow { fitMainWindow(instructionWindow, initially: false) }
         guard let mainWindow else { return }
         // Display disconnection, resolution and Dock changes can invalidate a
         // saved frame. Geometry repair does not reveal or activate the window.

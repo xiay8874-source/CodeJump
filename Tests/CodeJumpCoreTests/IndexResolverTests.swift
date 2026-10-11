@@ -327,9 +327,16 @@ struct IndexResolverTests {
             let resolver = CodeResolver(index: try ProjectIndex.build(projects: [ProjectRoot(name: "P", path: root.path)]))
             let wrong = try #require(ReferenceParser.parse("[Other#target](\(file.path):2)").first)
             let candidate = try #require(resolver.resolve(wrong).first)
-            #expect(candidate.line == nil)
+            // The verified link target remains authoritative, but a contradictory visible
+            // class label must force confirmation instead of being discarded as harmless.
+            #expect(candidate.line == 2)
             #expect(candidate.requiresConfirmation)
-            #expect(candidate.reason.contains("引用类名 Other"))
+            #expect(candidate.reason.contains("链接目标与附近标注不一致"))
+            let projectMismatch = try #require(ReferenceParser.parse("[OtherProject / Foo#target](codejump://open?path=Foo.java&line=2&project=P)").first)
+            #expect(projectMismatch.projectHint == "P")
+            let projectCandidate = try #require(resolver.resolve(projectMismatch).first)
+            #expect(projectCandidate.project.name == "P")
+            #expect(projectCandidate.requiresConfirmation)
             let correct = try #require(resolver.resolve(CodeReference(source: "", path: "Foo.java", symbol: "Foo.target", line: 2)).first)
             #expect(!correct.requiresConfirmation)
             let nested = try #require(resolver.resolve(CodeReference(source: "", path: "Foo.java", symbol: "Foo.Inner.target", line: 2)).first)
