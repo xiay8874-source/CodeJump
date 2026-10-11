@@ -9,7 +9,7 @@ struct ReferenceParserTests {
         `BatchProcessRecordCommand:246-251`
         `demo-alpha-core/.../ability/InternalRecordAbility.java`
         `RecordAbility.enrichRecord`（28-33 行）
-        [RecordMigrationHelper#compareRecordResults](/Users/developer/Projects/demo-beta/RecordMigrationHelper.java:242)
+        [RecordMigrationHelper#compareRecordResults](/Users/me/Projects/demo-beta/RecordMigrationHelper.java:242)
         """
         let refs = ReferenceParser.parse(text)
         #expect(refs.count == 5)

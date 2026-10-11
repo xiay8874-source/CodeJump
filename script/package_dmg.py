@@ -30,6 +30,26 @@ with tempfile.TemporaryDirectory(prefix='codejump-dmg-') as temporary:
     subprocess.run(['ditto', str(app), str(staging/'CodeJump.app')], check=True)
     (staging/'Applications').symlink_to('/Applications', target_is_directory=True)
     shutil.copy2(plugin, staging/plugin.name)
+    shutil.copy2(root/'LICENSE', staging/'LICENSE.txt')
+    (staging/'Install-English.txt').write_text(f'''CodeJump {version}
+
+Requirements: macOS 14 or later, {architecture}.
+Drag CodeJump.app into Applications, launch it, and add your local project folders.
+Enable CodeJump under System Settings > Privacy & Security > Accessibility.
+Option+J: navigate to code. Option+P: switch projects. Option+H: show settings.
+The current app interface is Chinese; README.en.md in the repository is the English guide.
+
+Optional IDEA plugin: {plugin.name}
+In IDEA 2026.1, choose Settings > Plugins > Install Plugin from Disk.
+Restart IDEA if requested, then enable the optional IDEA plugin in CodeJump.
+Bare-method lookup requires the target project to be open in IDEA.
+
+This release is locally signed, not Apple Developer ID signed or notarized.
+Another Mac may require Apple's normal first-launch approval flow.
+No project settings, authentication data, or signing private keys are included.
+License: MIT (see LICENSE.txt).
+Source and releases: https://github.com/xiay8874-source/CodeJump
+''', encoding='utf-8')
     (staging/'安装说明.txt').write_text(f'''CodeJump {version}
 
 系统要求：macOS 14 或更新版本，{architecture}。
@@ -45,6 +65,8 @@ with tempfile.TemporaryDirectory(prefix='codejump-dmg-') as temporary:
 此版本使用专用本机代码签名证书签名，未使用 Apple Developer ID 签名或 Apple 公证。
 另一台 Mac 首次运行可能需要通过系统的正常应用允许流程。
 应用仅本地处理代码；包内不包含个人项目配置、授权信息或签名私钥。
+许可证：MIT（见 LICENSE.txt）。
+英文安装说明：Install-English.txt。
 源码与后续版本：https://github.com/xiay8874-source/CodeJump
 ''', encoding='utf-8')
     subprocess.run(['hdiutil', 'create', '-volname', f'CodeJump {version}', '-srcfolder', str(staging),

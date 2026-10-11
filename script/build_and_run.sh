@@ -7,10 +7,29 @@ APP_NAME="CodeJump"
 BUNDLE_ID="com.xiay8874.CodeJump"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
 CONFIGURATION="${CODEJUMP_CONFIGURATION:-release}"
-swift build -c "$CONFIGURATION"
+# Avoid embedding the maintainer's local checkout/home paths in distributed binaries.
+swift build -c "$CONFIGURATION" \
+  -Xswiftc -gnone \
+  -Xswiftc -no-toolchain-stdlib-rpath \
+  -Xswiftc -Xfrontend -Xswiftc -no-serialize-debugging-options \
+  -Xswiftc -file-prefix-map -Xswiftc "$ROOT_DIR=CodeJump" \
+  -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=CodeJump" \
+  -Xswiftc -debug-prefix-map -Xswiftc "$HOME=/Users/developer" \
+  -Xswiftc -file-compilation-dir -Xswiftc .
 BUILD_PATH="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BUILD_PATH/CodeJump" "$APP_BUNDLE/Contents/MacOS/CodeJump"
+# SwiftPM may append its toolchain rpath after user compiler flags. A distributed
+# app must use system Swift libraries, never the build machine's SDK directory.
+python3 - "$APP_BUNDLE/Contents/MacOS/CodeJump" <<'PY'
+import re, subprocess, sys
+binary = sys.argv[1]
+commands = subprocess.check_output(['otool', '-l', binary], text=True)
+for path in re.findall(r'cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset', commands):
+    if '/Library/Developer/' in path or '.xctoolchain/' in path:
+        subprocess.run(['install_name_tool', '-delete_rpath', path, binary], check=True)
+PY
+cp "$ROOT_DIR/LICENSE" "$APP_BUNDLE/Contents/Resources/LICENSE.txt"
 "$ROOT_DIR/script/generate_icon.sh" "$ROOT_DIR/Assets/AppIcon.png" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,8 +40,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>CodeJump</string>
   <key>CFBundleDisplayName</key><string>CodeJump</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.3.1</string>
-  <key>CFBundleVersion</key><string>8</string>
+  <key>CFBundleShortVersionString</key><string>0.3.2</string>
+  <key>CFBundleVersion</key><string>9</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>

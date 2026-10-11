@@ -9,6 +9,11 @@ actor IDEABridge {
         let target: String; let project: String; let path: String; let line: Int
         let symbol: String; let signature: String; let preview: [PreviewLine]
     }
+    private struct Selection: Decodable {
+        let project: String
+        let frameActive: Bool?
+        let frameFocused: Bool?
+    }
     private var previews: [String: [PreviewLine]] = [:]
     private let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("CodeJump/idea")
@@ -89,11 +94,21 @@ actor IDEABridge {
 
     func preview(_ target: String) -> [PreviewLine] { previews[target] ?? [] }
 
-    func navigate(_ candidate: JumpCandidate, applicationPath: String?) async throws {
+    func navigate(_ candidate: JumpCandidate, applicationPath: String?, projects: [ProjectRoot]) async throws -> Bool {
         guard let target = candidate.pluginTarget,
               let endpoint = await endpoints(applicationPath: applicationPath).first(where: { $0.0 == candidate.pluginEndpoint })?.1 else { throw URLError(.cannotConnectToHost) }
         let body = try JSONSerialization.data(withJSONObject: ["target": target])
         _ = try await Self.request("navigate", endpoint: endpoint, body: body)
+        // New companions can confirm that the requested project's frame is already focused.
+        if let data = try? await Self.request("selection", endpoint: endpoint, body: Data("{}".utf8)),
+           let selections = try? JSONDecoder().decode([Selection].self, from: data),
+           selections.contains(where: { $0.project == candidate.project.path && $0.frameActive == true && $0.frameFocused == true }) {
+            return true
+        }
+        // Older companions select the editor without bringing its project window forward.
+        // Restrict the focus attempt to the same verified IDEA process that handled navigation.
+        return await ProjectWindowFocus.focus(project: candidate.project, editor: .idea,
+            configuredProjects: projects, applicationPath: applicationPath, expectedPID: endpoint.pid)
     }
 
     func connected(applicationPath: String?) async -> Int {

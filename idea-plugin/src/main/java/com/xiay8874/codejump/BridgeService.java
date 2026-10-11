@@ -1,6 +1,7 @@
 package com.xiay8874.codejump;
 
 import com.google.gson.*;
+import com.intellij.ide.impl.ProjectUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.*;
 import com.intellij.openapi.diagnostic.Logger;
@@ -8,6 +9,7 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.fileEditor.*;
 import com.intellij.openapi.project.*;
 import com.intellij.openapi.vfs.*;
+import com.intellij.openapi.wm.WindowManager;
 import com.intellij.psi.*;
 import com.intellij.psi.search.*;
 import com.intellij.util.concurrency.AppExecutorUtil;
@@ -90,7 +92,11 @@ public final class BridgeService implements Disposable {
           if (element == null || !element.isValid()) return false;
           PsiElement location = element.getNavigationElement();
           if (location instanceof com.intellij.pom.Navigatable navigatable && navigatable.canNavigate()) {
-            navigatable.navigate(true); return true;
+            navigatable.navigate(true);
+            // Selecting an editor does not activate a background IDE or choose
+            // its project window. Raise the frame belonging to this target.
+            ProjectUtil.focusProjectWindow(target.project, true);
+            return true;
           }
           return false;
         });
@@ -109,8 +115,11 @@ public final class BridgeService implements Disposable {
             var editor = FileEditorManager.getInstance(project).getSelectedTextEditor();
             if (editor == null) continue;
             var file = FileDocumentManager.getInstance().getFile(editor.getDocument());
+            var frame = WindowManager.getInstance().getFrame(project);
             if (file != null) selected.add(Map.of("project", canonical(project.getBasePath()), "path", file.getUrl(),
-                "line", editor.getCaretModel().getLogicalPosition().line + 1));
+                "line", editor.getCaretModel().getLogicalPosition().line + 1,
+                "frameActive", frame != null && frame.isActive(),
+                "frameFocused", frame != null && frame.isFocused()));
           }
           return selected;
         });

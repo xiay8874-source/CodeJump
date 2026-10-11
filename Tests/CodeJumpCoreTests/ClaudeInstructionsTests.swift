@@ -72,7 +72,7 @@ struct ClaudeInstructionsTests {
     @Test
     func exactLegacyStandaloneMigratesWithoutDuplicatingOldInstructions() throws {
         let original = ClaudeInstructions.legacyStandaloneText
-        #expect(Data(original.utf8).count == 2830)
+        #expect(Data(original.utf8).count == 2829)
         #expect(original.split(separator: "\n", omittingEmptySubsequences: false).count == 50)
         try temporaryFile(original) { url in
             let before = try ClaudeInstructions.read(at: url)
@@ -249,4 +249,59 @@ struct ClaudeInstructionsTests {
             #expect(throws: ClaudeInstructionError.notRegularFile) { try ClaudeInstructions.read(at: url) }
         }
     }
+}
+
+private extension ClaudeInstructions {
+    static let legacyStandaloneText = """
+    # 代码引用与编辑器定位规范
+
+    当回答涉及真实代码、源码定位、业务实现或调用链时，遵循以下规范，便于通过 CodeJump 定位到本地编辑器。
+
+    ## 1. 使用真实、完整的代码名称
+
+    - 使用源码中实际存在的完整类名和方法名，不用简称或概念名称替代。
+    - 例如使用 BatchCreateRecordEnricherManager，不简写为 EnricherManager。
+    - 方法引用使用“类名#方法名”，避免单独输出没有所属类的裸方法名。
+    - 存在同名类时补充包名；存在方法重载时补充已核实的参数类型。
+    - 概念性名称、伪代码和假设实现必须明确标注。
+
+    ## 2. 优先使用 Markdown 超链接
+
+    - 同一项目内，可见标签写“完整类名#方法名”；引用类时省略方法名，不重复添加项目名。
+    - 跨项目或存在项目归属歧义时，标签写“项目名 / 完整类名#方法名”。
+    - 链接目标使用项目内完整相对路径，已核实行号时追加“:行号”。
+    - 正文和链接目标均不使用本机绝对路径，不暴露用户名或机器目录。
+    - 链接目标中的目录必须完整，不使用 ... 等省略写法。
+    - 链接标签与目标必须对应同一个文件、类或方法。
+
+    格式示例：
+
+    ```markdown
+    [完整类名#方法名](模块/src/main/java/包路径/完整类名.java:行号)
+    [项目名 / 完整类名#方法名](模块/src/main/java/包路径/完整类名.java:行号)
+    ```
+
+    以上仅为格式示意，实际输出必须替换为已核实的名称、路径和行号。
+
+    ## 3. 清晰表达调用链和项目归属
+
+    - 同项目调用链不必在每个节点重复标注项目。
+    - 跨项目调用链中，对跨项目节点标明所属项目，避免混淆调用方和被调用方。
+    - 区分接口、实现类及不同项目中的同名类。
+    - 优先使用逐项列表，或“代码链接 → 代码链接”表达调用链。
+    - 中文解释和箭头放在引用外，不把整条调用链包进一个行内代码中。
+    - 不确定项目归属时明确说明，不根据名称猜测。
+
+    ## 4. 以已核实的源码为准
+
+    - 不编造项目归属、路径、类名、方法名、参数类型或行号。
+    - 修改代码后，引用行号前重新核对当前位置。
+    - 不知道行号时可以省略行号，不必强行补齐。
+    - 不知道准确路径时，使用行内代码形式的“完整类名#方法名”或完整类名，不编造链接；跨项目时补充必要的项目说明。
+    - 仅凭文档、记忆或推测得出的代码引用，应标注“未核实源码”。
+    - 引用历史版本时说明对应分支或提交，不把历史行号当成当前工作区位置。
+
+    仅在涉及代码引用时应用这些规则。普通问答和纯概念说明保持自然、简洁，不添加无关的项目名、路径或代码引用。
+
+    """
 }

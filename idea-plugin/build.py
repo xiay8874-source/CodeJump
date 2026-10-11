@@ -14,7 +14,7 @@ bundle.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(bundle/'codejump-companion.jar', 'w', zipfile.ZIP_DEFLATED) as jar:
     for p in classes.rglob('*'):
         if p.is_file(): jar.write(p, p.relative_to(classes))
-archive = root.parent/'dist/CodeJumpCompanion-0.2.1.zip'
+archive = root.parent/'dist/CodeJumpCompanion-0.2.2.zip'
 archive.parent.mkdir(exist_ok=True)
 with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
     for p in bundle.rglob('*'):

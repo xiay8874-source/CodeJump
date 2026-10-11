@@ -422,9 +422,11 @@ struct Preferences: Codable {
             lastLaunchTime = Date()
             Task {
                 do {
-                    try await ideaBridge.navigate(candidate, applicationPath: preferences.customApplicationPath)
+                    let focused = try await ideaBridge.navigate(candidate, applicationPath: preferences.customApplicationPath,
+                                                                projects: preferences.projects)
                     windows.dismissCandidates(); recordOpened(candidate)
-                    status = "已请求 IDEA 按当前声明定位"
+                    if focused { status = "已在 IDEA 打开当前声明" }
+                    else { feedback("IDEA 已定位代码，但未能切换项目窗口。请更新 IDEA 插件后重试。") }
                 } catch { feedback("IDEA 插件目标已失效或未连接，请重新定位。") }
             }
             return

@@ -71,6 +71,8 @@ struct CandidateView: View {
                 Spacer()
                 Button("识别反馈…") { store.exportRecognitionFeedback() }.controlSize(.small)
                 Button("取消") { store.dismissCandidates() }.controlSize(.small)
+                Button("打开位置") { store.choose(store.selectedIndex) }.controlSize(.small)
+                    .buttonStyle(.borderedProminent)
             }
         }.padding(18).frame(width: 570)
             .task(id: store.candidates.indices.contains(store.selectedIndex) ? store.candidates[store.selectedIndex].id : "") {

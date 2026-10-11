@@ -5,7 +5,7 @@ import Darwin
 import Foundation
 import OSLog
 
-/// Called only for an explicit project selection, from a detached task.
+/// Called only for an explicit project selection or confirmed navigation, off the main actor.
 /// Unknown or ambiguous windows fall back to the editor's project CLI.
 enum ProjectWindowFocus {
     private static let maximumWindows = 24
@@ -13,7 +13,8 @@ enum ProjectWindowFocus {
     private static let maximumDepth = 6
 
     static func focus(project: ProjectRoot, editor: EditorKind,
-                      configuredProjects: [ProjectRoot], applicationPath: String? = nil) async -> Bool {
+                      configuredProjects: [ProjectRoot], applicationPath: String? = nil,
+                      expectedPID: pid_t? = nil) async -> Bool {
         let trace = Diagnostic()
         guard editor == .idea else { trace.event("unsupported_editor"); return false }
         guard AXIsProcessTrusted() else { trace.event("permission_missing"); return false }
@@ -24,6 +25,7 @@ enum ProjectWindowFocus {
         }
         let applications: [ApplicationProbe] = await MainActor.run {
             NSWorkspace.shared.runningApplications.compactMap { application in
+                if let expectedPID, application.processIdentifier != expectedPID { return nil }
                 if let applicationPath {
                     guard application.bundleURL?.resolvingSymlinksInPath().path == URL(fileURLWithPath: applicationPath).resolvingSymlinksInPath().path else { return nil }
                 }

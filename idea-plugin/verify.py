@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the installed bridge without printing credentials. Optional navigation is explicit."""
-import argparse, json, pathlib, urllib.request, urllib.error
+import argparse, json, pathlib, time, urllib.request, urllib.error
 p=argparse.ArgumentParser()
 p.add_argument('--project', required=True)
 p.add_argument('--navigate', action='store_true')
+p.add_argument('--require-focus', action='store_true', help='Also verify the target project frame becomes active and focused; requires --navigate')
 p.add_argument('--bare-method', help='Check and optionally navigate an unqualified project method')
 args=p.parse_args()
+if args.require_focus and not args.navigate:
+    p.error('--require-focus requires --navigate')
 entries=list((pathlib.Path.home()/'Library/Application Support/CodeJump/idea').glob('*.json'))
 assert entries, 'Start CodeJump Bridge in IDEA first'
 e=json.loads(max(entries,key=lambda p:p.stat().st_mtime).read_text())
@@ -40,7 +43,17 @@ if args.bare_method:
         exact=[bare[0]]
 if args.navigate:
     assert call('navigate',{'target':exact[0]['target']})[0]==200
-    status,selected=call('selection')
-    assert status==200 and any(r['project']==args.project and r['line']==exact[0]['line'] and r['path']==(pathlib.Path(exact[0]['path']).as_uri() if exact[0]['path'].startswith('/') else exact[0]['path']) for r in selected)
+    expected_path=pathlib.Path(exact[0]['path']).as_uri() if exact[0]['path'].startswith('/') else exact[0]['path']
+    deadline=time.monotonic()+2
+    while True:
+        status,selected=call('selection')
+        assert status==200, 'Cannot read current editor selection'
+        match=next((r for r in selected if r['project']==args.project and r['line']==exact[0]['line'] and r['path']==expected_path),None)
+        if match and (not args.require_focus or (match.get('frameActive') and match.get('frameFocused'))):
+            break
+        assert time.monotonic()<deadline, 'Target editor was not selected in its active, focused project frame' if args.require_focus else 'Target editor selection did not match'
+        time.sleep(0.1)
     result['navigation']={'verified':True,'line':exact[0]['line']}
+    if args.require_focus:
+        result['navigation']['targetFrameActiveAndFocused']=True
 print(json.dumps(result,ensure_ascii=False,indent=2))
