@@ -79,7 +79,7 @@ Open **Claude 代码引用 → 安装 / 编辑规则…** on the home screen to 
 - Existing content is backed up under `~/.claude/codejump-backups/` before saving or removing rules.
 - Concurrent external changes are detected rather than overwritten. Resetting to the recommendation changes the draft until you save.
 
-This configures Claude **Code** instructions, including its desktop Code mode. It does not change ordinary Claude chat preferences, model routing, or account settings. The rules encourage concise symbol labels and relative-path links; model compliance is not guaranteed. The editor lets you customize the rules, including their language.
+This configures Claude **Code** instructions, including its desktop Code mode. It does not change ordinary Claude chat preferences, model routing, or account settings. The recommended rules ask for concise symbol labels and absolute-path links in conversation replies, so references stay exact when several git worktrees of one repository are open; files, commit messages, PR descriptions, and shared documents still use relative paths. Model compliance is not guaranteed. The editor lets you customize the rules, including their language.
 
 ## Optional IDEA companion
 
