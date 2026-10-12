@@ -27,6 +27,9 @@ public enum ReferenceParser {
     private static let precedingProject = regex(#"(?:^|\s)([A-Za-z][A-Za-z0-9_.-]*)\s+/\s*$"#)
     private static let revisionPrefix = regex(#"^([A-Za-z][A-Za-z0-9_.-]*)@([A-Za-z0-9_./-]{1,128}):(.+)$"#)
     private static let revisionMethod = regex(#"^(.*(?:\.[A-Za-z]+)(?::[0-9]+(?:-[0-9]+|:[0-9]+)?|#L[0-9]+(?:-L?[0-9]+)?))/([^/\s]+)$"#)
+    /// RPC call names in traces and logs: `group/Service.method`, `group/Service:method(Args)`,
+    /// optionally prefixed by `caller->`. A file name such as `dir/Foo.java` is not a call.
+    private static let rpcCall = regex(#"(?<![A-Za-z0-9_.$/>-])(?:[A-Za-z][A-Za-z0-9_.-]*->)?[A-Za-z][A-Za-z0-9_.-]*/((?:[a-z][A-Za-z0-9_$]*\.)*[A-Z][A-Za-z0-9_$]*)[.:#](?!(?:"# + extensions + #")(?![A-Za-z0-9_$]))([a-z_$][A-Za-z0-9_$]*)(\([^()\r\n]{0,256}\))?(?![A-Za-z0-9_$./])"#)
 
     /// Opt-in for a caller that obtained an exact class label from an accessibility element.
     /// Generic prose should use `parse`, which does not treat a word like "Hello" as a class.
@@ -134,6 +137,15 @@ public enum ReferenceParser {
         for match in matches(revisionReference, String(remainder)) {
             let raw = original.substring(with: match.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: ",;，。)）]}"))
             record(atom(raw, source: raw, allowBareClass: false), at: match.range)
+            mask(match.range)
+        }
+        for match in matches(rpcCall, String(remainder)) {
+            let arguments = group(match, 3, text)
+            var reference = CodeReference(source: original.substring(with: match.range),
+                                          symbol: group(match, 1, text) + "." + group(match, 2, text),
+                                          parameterSignature: arguments.isEmpty ? nil : String(arguments.dropFirst().dropLast()))
+            reference.preferImplementation = true
+            record(reference, at: match.range)
             mask(match.range)
         }
         // Absolute paths may contain spaces. Relative paths with spaces are supported when quoted,

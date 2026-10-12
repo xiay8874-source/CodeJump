@@ -24,6 +24,9 @@ public struct CodeReference: Hashable, Sendable, Codable {
     public var parameterTypes: [String]?
     public var parameterSignature: String?
     public var isFallback: Bool
+    /// An RPC call name such as `udp-default/OrderService.query` names the remote interface;
+    /// the server-side implementation (`OrderServiceImpl`) is the more useful destination.
+    public var preferImplementation = false
     public init(source: String, path: String? = nil, symbol: String? = nil, line: Int? = nil,
                 endLine: Int? = nil, column: Int? = nil, projectHint: String? = nil, revision: String? = nil, contextAmbiguous: Bool = false,
                 parameterTypes: [String]? = nil, parameterSignature: String? = nil, isFallback: Bool = false) {

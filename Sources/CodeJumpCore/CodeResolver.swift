@@ -23,6 +23,17 @@ public struct CodeResolver: Sendable {
 
     public func resolve(_ reference: CodeReference) -> [JumpCandidate] {
         let target = Target(reference)
+        if reference.preferImplementation, let owner = target.owner, let method = target.symbol {
+            // Prefer the conventional implementation of a remote interface; fall back to the interface.
+            var implementation = reference
+            implementation.preferImplementation = false
+            implementation.symbol = owner + "Impl." + method
+            let candidates = resolve(implementation).filter { !$0.requiresConfirmation }
+            if !candidates.isEmpty { return candidates }
+            var interface = reference
+            interface.preferImplementation = false
+            return resolve(interface)
+        }
         guard let path = target.path, !path.isEmpty else { return [] }
         var files = matchingFiles(path: path, projectHint: reference.projectHint)
         var abbreviatedClass = false
