@@ -46,6 +46,11 @@ public struct CodeResolver: Sendable {
             }
             files = Array(files.prefix(64)); abbreviatedClass = !files.isEmpty
         }
+        var droppedPrefix: String?
+        if files.isEmpty, reference.path != nil, !reference.isFallback,
+           let trailing = trailingMatches(path: path, projectHint: reference.projectHint) {
+            files = trailing.files; droppedPrefix = trailing.dropped
+        }
         var candidates: [JumpCandidate] = []
         for (offset, file) in files.enumerated() {
             guard let project = projects[file.projectID] else { continue }
@@ -60,6 +65,7 @@ public struct CodeResolver: Sendable {
                                           relativePath: file.relativePath, line: reference.line,
                                           column: reference.column, symbol: abbreviatedClass ? file.stem : reference.symbol)
             if abbreviatedClass { candidate.require("未找到名为 \(path) 的类；这是类名后缀匹配，请选择完整类名（最多 64 项）") }
+            if let droppedPrefix { candidate.require("路径开头的 \(droppedPrefix) 与实际目录不符，已忽略后按剩余路径匹配；请确认") }
             if reference.isFallback { candidate.require("来自邻近文字，未命中鼠标指向的引用；请确认") }
             if reference.contextAmbiguous {
                 candidate.require("链接目标与附近标注不一致，请核对打开位置")
@@ -170,6 +176,28 @@ public struct CodeResolver: Sendable {
             let candidateParts = file.relativePath.split(separator: "/").map(String.init)
             return Self.matches(parts: parts, candidate: candidateParts, stem: file.stem)
         }
+    }
+
+    /// Agent prose sometimes replaces a long leading directory with a placeholder, such as
+    /// `S/helper/Foo.java`. Keep the longest suffix that still matches, anchored by at least one
+    /// directory, so a wrong inner directory or a bare filename never turns into a fuzzy hit.
+    private func trailingMatches(path: String, projectHint: String?) -> (files: [IndexedFile], dropped: String)? {
+        guard !path.hasPrefix("/"), !path.hasPrefix("~/") else { return nil }
+        var components = path.replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        while components.first == "." { components.removeFirst() }
+        guard !components.contains("..") else { return nil }
+        var hint = projectHint
+        if hint == nil, components.count > 1,
+           projects.values.contains(where: { projectNames($0).contains(components[0].lowercased()) }) {
+            hint = components.removeFirst()
+        }
+        guard components.count > 2 else { return nil }
+        for start in 1...(components.count - 2) {
+            let files = matchingFiles(path: components[start...].joined(separator: "/"), projectHint: hint)
+            if !files.isEmpty { return (Array(files.prefix(64)), components[..<start].joined(separator: "/")) }
+        }
+        return nil
     }
 
     private func projectNames(_ project: ProjectRoot) -> Set<String> {

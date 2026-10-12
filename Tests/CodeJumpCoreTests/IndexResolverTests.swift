@@ -62,6 +62,35 @@ struct IndexResolverTests {
     }
 
     @Test
+    func testPlaceholderPrefixFallsBackToConfirmedTrailingPath() throws {
+        try workspace { root in
+            let a = root.appendingPathComponent("demo-alpha")
+            let b = root.appendingPathComponent("demo-beta")
+            try write("demo-beta-service/src/main/java/com/acme/service/helper/PackageHelper.java", in: b,
+                      "class PackageHelper {\n  void load() {}\n}\n")
+            try write("src/main/java/com/acme/other/PackageHelper.java", in: a)
+            let resolver = CodeResolver(index: try ProjectIndex.build(projects: [
+                ProjectRoot(name: "demo-alpha", path: a.path), ProjectRoot(name: "demo-beta", path: b.path)
+            ]))
+            let shortened = resolver.resolve(CodeReference(source: "", path: "S/helper/PackageHelper.java", line: 2))
+            #expect(shortened.count == 1)
+            #expect(shortened.first?.project.name == "demo-beta")
+            #expect(shortened.first?.line == 2)
+            #expect(shortened.first?.requiresConfirmation == true)
+            #expect(shortened.first?.reason.contains("S") == true)
+            #expect(resolver.resolve(CodeReference(source: "", path: "demo-beta/S/helper/PackageHelper.java")).count == 1)
+            #expect(resolver.resolve(CodeReference(source: "", path: "demo-alpha/S/helper/PackageHelper.java")).isEmpty)
+            // A bare filename or a wrong inner directory never becomes a fuzzy hit.
+            #expect(resolver.resolve(CodeReference(source: "", path: "S/PackageHelper.java")).isEmpty)
+            #expect(resolver.resolve(CodeReference(source: "", path: "S/wrong/PackageHelper.java")).isEmpty)
+            #expect(resolver.resolve(CodeReference(source: "", path: "../helper/PackageHelper.java")).isEmpty)
+            var nearby = CodeReference(source: "", path: "S/helper/PackageHelper.java")
+            nearby.isFallback = true
+            #expect(resolver.resolve(nearby).isEmpty)
+        }
+    }
+
+    @Test
     func testSkipsExcludedFoldersAndDirectoryAndFileSymlinks() throws {
         try workspace { root in
             let project = root.appendingPathComponent("project")

@@ -68,7 +68,7 @@ A custom URL always opens a target preview before navigation. It cannot execute 
 
 Local Java resolution checks method declarations and their owning classes, including nested classes. Comments, strings, and method calls are excluded. Overloads remain candidates; stale line numbers that conflict with a method's current location require confirmation. Other languages support file, line, and column navigation.
 
-Bare method-name search requires the optional IDEA companion. Without it, include the owning class, such as `Foo#process`. A sufficiently long abbreviated class name may produce explicitly marked suffix candidates; it is not treated as an exact match.
+Bare method-name search requires the optional IDEA companion. Without it, include the owning class, such as `Foo#process`. A sufficiently long abbreviated class name may produce explicitly marked suffix candidates; it is not treated as an exact match. When a placeholder replaces the leading directories, such as `S/helper/Foo.java`, the remaining path is matched and shown as a candidate to confirm.
 
 ## Claude Code reference rules
 
@@ -79,7 +79,7 @@ Open **Claude 代码引用 → 安装 / 编辑规则…** on the home screen to 
 - Existing content is backed up under `~/.claude/codejump-backups/` before saving or removing rules.
 - Concurrent external changes are detected rather than overwritten. Resetting to the recommendation changes the draft until you save.
 
-This configures Claude **Code** instructions, including its desktop Code mode. It does not change ordinary Claude chat preferences, model routing, or account settings. The recommended rules ask for concise symbol labels and absolute-path links in conversation replies, so references stay exact when several git worktrees of one repository are open; files, commit messages, PR descriptions, and shared documents still use relative paths. Model compliance is not guaranteed. The editor lets you customize the rules, including their language.
+This configures Claude **Code** instructions, including its desktop Code mode. It does not change ordinary Claude chat preferences, model routing, or account settings. The recommended rules ask for concise symbol labels and absolute-path links without invented path abbreviations in conversation replies, so references stay exact when several git worktrees of one repository are open; files, commit messages, PR descriptions, and shared documents still use relative paths. Model compliance is not guaranteed. The editor lets you customize the rules, including their language.
 
 ## Optional IDEA companion
 
