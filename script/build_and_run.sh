@@ -17,6 +17,12 @@ swift build -c "$CONFIGURATION" \
   -Xswiftc -debug-prefix-map -Xswiftc "$HOME=/Users/developer" \
   -Xswiftc -file-compilation-dir -Xswiftc .
 BUILD_PATH="$(swift build -c "$CONFIGURATION" --show-bin-path)"
+# An interrupted codesign can leave a sealed reference to a missing *.cstemp file.
+# Always package into a fresh bundle so a stale signature can never fail verification.
+case "$APP_BUNDLE" in
+  "$ROOT_DIR"/dist/*.app) rm -rf -- "$APP_BUNDLE" ;;
+  *) echo "Unexpected bundle path; refusing to clean it." >&2; exit 1 ;;
+esac
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BUILD_PATH/CodeJump" "$APP_BUNDLE/Contents/MacOS/CodeJump"
 # SwiftPM may append its toolchain rpath after user compiler flags. A distributed
@@ -40,8 +46,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>CodeJump</string>
   <key>CFBundleDisplayName</key><string>CodeJump</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.3.2</string>
-  <key>CFBundleVersion</key><string>9</string>
+  <key>CFBundleShortVersionString</key><string>0.3.3</string>
+  <key>CFBundleVersion</key><string>10</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -76,6 +82,13 @@ if [ "$MODE" = "--install" ]; then
     ditto "$DESTINATION" "$ROOT_DIR/output/backups/CodeJump-$(date +%Y%m%d-%H%M%S).app"
   fi
   ditto "$APP_BUNDLE" "$DESTINATION"
+  # Build and backup copies share the bundle identifier. Keep only the installed app registered,
+  # so System Settings grants Accessibility to /Applications/CodeJump.app and not a stale copy.
+  LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  for copy in "$APP_BUNDLE" "$ROOT_DIR"/output/backups/*.app; do
+    [ -d "$copy" ] && "$LSREGISTER" -u "$copy" >/dev/null 2>&1 || true
+  done
+  "$LSREGISTER" -f "$DESTINATION" >/dev/null 2>&1 || true
   APP_BUNDLE="$DESTINATION"
 fi
 case "$MODE" in

@@ -56,6 +56,16 @@ public struct ProjectIndex: Codable, Sendable {
         return ProjectIndex(projects: normalized, files: sorted(files))
     }
 
+    /// Filesystem events use the same project-relative rule as scanning. A project root may
+    /// itself live below a directory such as build/ or .cache/; only components inside the
+    /// deepest containing root count. Paths outside every root are kept for updating(paths:).
+    public static func isIgnoredEvent(_ path: String, roots: [String]) -> Bool {
+        let lexical = lexicalPath(path)
+        guard let root = roots.map(lexicalPath).filter({ isWithin(lexical, directory: $0) })
+                .max(by: { $0.count < $1.count }) else { return false }
+        return isExcluded(lexical, root: root)
+    }
+
     /// Refresh only the touched subtrees. Deleted directories remove all their indexed descendants.
     /// Coalesced parent events and events outside the imported roots do not trigger unrelated scans.
     public func updating(paths: [String]) throws -> ProjectIndex {

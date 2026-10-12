@@ -9,9 +9,11 @@ final class ProjectWatcher: @unchecked Sendable {
     private var pending = Set<String>()
     private var pendingWork: DispatchWorkItem?
     private let onChange: @Sendable ([String]) -> Void
+    private let roots: [String]
 
     init(paths: [String], onChange: @escaping @Sendable ([String]) -> Void) {
         self.onChange = onChange
+        self.roots = paths
         guard !paths.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
             retain: nil, release: nil, copyDescription: nil)
@@ -19,8 +21,9 @@ final class ProjectWatcher: @unchecked Sendable {
             guard let context else { return }
             let watcher = Unmanaged<ProjectWatcher>.fromOpaque(context).takeUnretainedValue()
             let array = unsafeBitCast(paths, to: NSArray.self)
+            // Judge excluded folders relative to each project root, exactly as scanning does.
             let values = (0..<count).compactMap { array[$0] as? String }.filter { path in
-                !URL(fileURLWithPath: path).pathComponents.contains(where: { ProjectIndex.excludedDirectoryNames.contains($0) })
+                !ProjectIndex.isIgnoredEvent(path, roots: watcher.roots)
             }
             let mustScan = (0..<count).contains { flags[$0] & UInt32(kFSEventStreamEventFlagMustScanSubDirs) != 0 }
             guard mustScan || !values.isEmpty else { return }

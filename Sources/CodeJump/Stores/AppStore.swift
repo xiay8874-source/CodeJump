@@ -106,7 +106,8 @@ struct Preferences: Codable {
         configureWatcher()
         indexing = true
         Task {
-            if let count = await service.restore(projects: preferences.projects) { fileCount = count }
+            // A cached snapshot is usable at once: every hit is rechecked on disk before use.
+            if let count = await service.restore(projects: preferences.projects) { fileCount = count; indexReady = true }
             refreshIndex()
         }
         if preferences.projects.isEmpty { showMainWindow() }
@@ -236,7 +237,8 @@ struct Preferences: Codable {
         // A superseded incremental batch must never be lost: coalesce with a full refresh.
         let paths = indexing || (changedPaths?.count ?? 0) > 256 ? nil : changedPaths
         refreshTask?.cancel()
-        indexing = true; indexReady = false
+        // Keep serving the previous snapshot while refreshing; only the first build blocks lookups.
+        indexing = true
         let projects = preferences.projects
         status = "正在更新项目索引…"
         refreshTask = Task {
@@ -261,7 +263,7 @@ struct Preferences: Codable {
         recordInteractionOrigin()
         guard accessibilityGranted else { feedback("请在菜单栏“项目与设置”中开启辅助功能权限。"); return }
         guard !preferences.projects.filter(\.enabled).isEmpty else { feedback("尚未导入项目，请从菜单栏打开“项目与设置”。"); return }
-        guard !indexing && indexReady else { feedback("项目索引正在准备，完成后再试。"); return }
+        guard indexReady else { feedback("项目索引正在准备，完成后再试。"); return }
         let point = CGEvent(source: nil)?.location ?? .zero
         let sourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let name = NSWorkspace.shared.frontmostApplication?.localizedName ?? "应用"
@@ -277,7 +279,7 @@ struct Preferences: Codable {
                 return abs(current.x - point.x) <= 8 && abs(current.y - point.y) <= 8
             }, capture: {
                 await Task.detached(priority: .userInitiated) {
-                    HoverReader.capture(x: point.x, y: point.y, application: name)
+                    HoverReader.capture(x: point.x, y: point.y, application: name, pid: sourcePID)
                 }.value
             }, isUseful: { $0.hasRecognizableReference })
             guard generation == searchGeneration else { return }
@@ -324,7 +326,9 @@ struct Preferences: Codable {
             }
             busy = false; captureText = capture.fragments.first?.text ?? ""; captureOrigin = name
             lastReferences = primary + fallback; candidates = []
-            if !primary.isEmpty {
+            if let root = ImportHint.missingProjectRoot(for: primary + fallback, projects: preferences.projects) {
+                feedback(missingProjectMessage(root))
+            } else if !primary.isEmpty {
                 feedback("已识别引用，但没有找到声明。裸方法名需要已连接的 IDEA 插件和已打开的项目。")
             } else { feedback("未识别到代码位置，选中完整引用后按 \(shortcutLabel) 重试。") }
         }
@@ -332,7 +336,7 @@ struct Preferences: Codable {
 
     func searchManually() {
         recordInteractionOrigin()
-        guard !indexing && indexReady else { feedback("请等待索引完成，或重新索引。"); return }
+        guard indexReady else { feedback("请等待索引完成，或重新索引。"); return }
         var references = ReferenceParser.parse(query)
         if references.isEmpty, let label = ReferenceParser.parseExplicitLabel(query) { references = [label] }
         guard !references.isEmpty else {
@@ -350,7 +354,7 @@ struct Preferences: Codable {
         guard url.scheme == "codejump", url.host == "open" else { return }
         recordInteractionOrigin()
         query = url.absoluteString
-        guard indexReady && !indexing else { pendingLink = url; feedback("索引准备好后会显示定位结果。"); return }
+        guard indexReady else { pendingLink = url; feedback("索引准备好后会显示定位结果。"); return }
         // External links always expose the resolved destination before opening.
         let references = ReferenceParser.parse(query)
         guard !references.isEmpty else { feedback("跳转链接无效。"); return }
@@ -369,20 +373,35 @@ struct Preferences: Codable {
     }
 
     private func resolveScoped(_ references: [CodeReference]) async -> ([JumpCandidate], Double) {
-        let result = await service.resolve(references)
+        var result = await service.resolve(references)
+        // A file created moments ago may be missing from the previous snapshot: wait once for the refresh.
+        // Bare method names never resolve from the file index, so they do not wait for it.
+        let locallyResolvable = references.contains { reference in
+            reference.path != nil || reference.symbol.map { $0.first?.isUppercase == true || $0.contains(".") || $0.contains("#") } == true
+        }
+        if result.0.isEmpty, locallyResolvable, indexing, let pending = refreshTask {
+            await pending.value
+            result = await service.resolve(references)
+        }
+        let local = result.0.filter { scopeProjectID == nil || $0.project.id == scopeProjectID }
         let enabled = preferences.projects.filter { $0.enabled && (scopeProjectID == nil || $0.id == scopeProjectID) }
-        let plugin = preferences.ideaPluginEnabled && preferences.editor == .idea
+        // The local index already verified an exact declaration: skip the IDEA round trip, which can wait
+        // up to 1.5 s when IDEA's shared thread pool is busy and would add confirmation-only PSI candidates.
+        // The plugin still answers bare method names, inherited methods and dependency classes.
+        let needsPlugin = local.allSatisfy(\.requiresConfirmation)
+        let plugin = needsPlugin && preferences.ideaPluginEnabled && preferences.editor == .idea
             ? await ideaBridge.resolve(references, projects: enabled, applicationPath: preferences.customApplicationPath) : []
-        let scoped = plugin + result.0.filter { candidate in
-            (scopeProjectID == nil || candidate.project.id == scopeProjectID)
-            && !plugin.contains(where: { $0.project.id == candidate.project.id && $0.absolutePath == candidate.absolutePath && $0.line == candidate.line })
+        let scoped = plugin + local.filter { candidate in
+            !plugin.contains(where: { $0.project.id == candidate.project.id && $0.absolutePath == candidate.absolutePath && $0.line == candidate.line })
         }
         let preferred = preferences.rememberSourceProject ? sourceApplicationID.flatMap { preferences.sourceProjects[$0] } : nil
-        let sorted = scoped.enumerated().sorted {
-            let left = $0.element.project.id == preferred, right = $1.element.project.id == preferred
-            return left == right ? $0.offset < $1.offset : left
-        }.map(\.element)
+        let sorted = CandidateOrdering.sorted(scoped, preferredProjectID: preferred,
+                                              recentJumps: preferences.recentJumps, usage: preferences.projectUsage)
         return (sorted, result.1)
+    }
+
+    private func missingProjectMessage(_ root: String) -> String {
+        "文件所在的 \(URL(fileURLWithPath: root).lastPathComponent) 尚未导入或已停用，请在“项目与设置”中添加：\(root)"
     }
 
     private func finishResolution(_ references: [CodeReference], result: ([JumpCandidate], Double), precise: Bool) {
@@ -392,6 +411,9 @@ struct Preferences: Codable {
         candidates = result.0; selectedIndex = 0; busy = false
         log.info("resolve refs=\(references.count) candidates=\(result.0.count) elapsed_ms=\(result.1)")
         guard !candidates.isEmpty else {
+            if let root = ImportHint.missingProjectRoot(for: references, projects: preferences.projects) {
+                feedback(missingProjectMessage(root)); return
+            }
             feedback(references.contains(where: { $0.path == nil && $0.symbol?.first?.isLowercase == true && !($0.symbol?.contains(".") ?? false) })
                 ? "已识别方法名，但未找到声明。请确认 IDEA 插件已连接、目标项目已打开，或补充“类名.方法名”。"
                 : "已识别引用，但已启用项目中没有精确匹配或类名后缀候选，请核对完整类名。"); return

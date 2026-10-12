@@ -139,7 +139,7 @@ struct ContentView: View {
                     TextField("文件路径、Class.java:128 或 Class.method", text: $store.query)
                         .textFieldStyle(.roundedBorder).onSubmit { store.searchManually() }
                     Button("定位") { store.searchManually() }
-                        .disabled(store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.indexing || store.busy)
+                        .disabled(store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.indexReady || store.busy)
                 }
                 if !store.lastOpened.isEmpty {
                     Text(store.lastOpened).font(.caption).foregroundStyle(.secondary)

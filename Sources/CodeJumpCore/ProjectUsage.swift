@@ -69,3 +69,35 @@ public enum ProjectRanking {
         let id: String
     }
 }
+
+public enum CandidateOrdering {
+    /// Moves whole projects and keeps the resolver's order inside each project.
+    /// The remembered source project comes first, then projects by their latest activity
+    /// (an opened jump or a project selection), then projects without history.
+    /// Copies of one file in several git worktrees therefore list the worktree in use first.
+    public static func sorted(_ candidates: [JumpCandidate], preferredProjectID: UUID? = nil,
+                              recentJumps: [RecentJump], usage: [String: ProjectUsage]) -> [JumpCandidate] {
+        var lastActive: [UUID: Date] = [:]
+        func note(_ id: UUID, _ date: Date) {
+            if lastActive[id].map({ date > $0 }) ?? true { lastActive[id] = date }
+        }
+        for jump in recentJumps { note(jump.projectID, jump.date) }
+        for (key, value) in usage {
+            if let id = UUID(uuidString: key), let opened = value.lastOpened { note(id, opened) }
+        }
+        return candidates.enumerated().sorted { left, right in
+            let l = left.element.project.id, r = right.element.project.id
+            if l != r {
+                let lp = l == preferredProjectID, rp = r == preferredProjectID
+                if lp != rp { return lp }
+                switch (lastActive[l], lastActive[r]) {
+                case let (a?, b?) where a != b: return a > b
+                case (.some, nil): return true
+                case (nil, .some): return false
+                default: break
+                }
+            }
+            return left.offset < right.offset
+        }.map(\.element)
+    }
+}
